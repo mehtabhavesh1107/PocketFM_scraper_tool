@@ -1,4 +1,4 @@
-Pocket FM
+# Pocket FM
 
 A high-performance, full-stack application designed for PocketFM to scrape and extract structured data from Amazon Bestseller lists. It features deep-link detail extraction, high-concurrency tab orchestration, and professional Excel data formatting.
 
@@ -8,12 +8,12 @@ A high-performance, full-stack application designed for PocketFM to scrape and e
 - **Deep Extraction (Part 2)**: Automatically visits every individual product page to extract Descriptions, Publishers, and Publication Dates.
 - **Professional Excel Export**: Generates auto-sized, text-wrapped Microsoft Excel (`.xlsx`) files using Pandas and OpenPyXL.
 - **Data Cleaning Engine**: Standardizes ratings, review counts, and normalizes unicode text (NFKD) to remove zero-width characters and stray punctuation.
-- **ChatGPT-Inspired UI**: A modern, glassmorphic React interface with real-time backend processing logs.
+- **AI-Driven UI**: A modern, glassmorphic React interface featuring the **Premium Prompt Box**, real-time terminal logs, and TypeScript type safety.
 
 ## 🛠️ Technical Stack
 
 - **Backend**: Python 3.11, Flask, Playwright (Async), Pandas, OpenPyXL.
-- **Frontend**: React 18, Vite, Lucide React, Axios.
+- **Frontend**: React 18, Vite, **TypeScript**, **Tailwind CSS v4**, Framer Motion, Radix UI.
 - **Orchestration**: `concurrently` (runs Flask and Vite with one command).
 
 ---
@@ -29,8 +29,12 @@ PocketFM/
 │   └── venv/               # Python Virtual Environment
 ├── frontend/
 │   ├── src/
-│   │   ├── App.jsx         # ChatGPT-style React UI
-│   │   └── index.css       # Premium Design System
+│   │   ├── components/ui/  # Premium AI Prompt Box & shadcn components
+│   │   ├── lib/utils.ts    # Tailwind Merging Utility
+│   │   ├── App.tsx         # Modernized React UI (TSX)
+│   │   └── index.css       # Tailwind v4 Design System
+│   ├── tailwind.config.js  # Theme Configuration
+│   ├── tsconfig.json       # TypeScript Configuration
 │   └── package.json        # Frontend Dependencies
 ├── README.md               # Main Documentation
 └── package.json            # Unified Scripts & Root Config
