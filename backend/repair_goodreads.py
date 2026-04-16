@@ -15,7 +15,7 @@ from excel_utility import save_to_excel
 INPUT_FILE = "scraped_data.xlsx"
 OUTPUT_FILE = "scraped_data.xlsx" 
 CHECK_COLUMN = "GoodReads_Series_URL"
-MAX_CONCURRENT_TABS = 20  # Turbo Speed!
+MAX_CONCURRENT_TABS = 30  # Industrial Speed!
 
 def extract_asin(url):
     """Extract ASIN from Amazon URL."""

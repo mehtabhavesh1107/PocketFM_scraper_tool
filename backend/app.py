@@ -69,12 +69,16 @@ async def run_scrape_process(url, limit):
 
         goodreads_scraper = GoodreadsScraper(headless=False)
         author_scraper = AuthorScraper(headless=False)
-        sem = asyncio.Semaphore(20) # Turbo Speed Upgrade
+        sem = asyncio.Semaphore(30) # Industrial Speed Upgrade
         
         # Cache to avoid redundant searches for the same author in a single run
         author_cache = {}
+        total_books = len(book_list)
+        completed_count = 0
+        final_results = []
 
         async def limited_tab_scrape(book):
+            nonlocal completed_count
             async with sem:
                 try:
                     title = book.get('Book Title', 'N/A')
@@ -84,7 +88,10 @@ async def run_scrape_process(url, limit):
                         url = base_url.rstrip('/') + (url if url.startswith('/') else '/' + url)
                         book['Amazon URL'] = url
 
-                    print(f"Opening tab for: {title.encode('ascii', 'ignore').decode('ascii')}")
+                    completed_count += 1
+                    print(f"[{completed_count}/{total_books}] Opening Tab: {title[:40].encode('ascii', 'ignore').decode('ascii')}...")
+                    
+                    # --- DEEP-DIVE TABS ARE HEADLESS FOR STABILITY ---
                     details = await scraper.scrape_product_details_tab(
                         context, url, base_url=base_url
                     )
@@ -102,7 +109,6 @@ async def run_scrape_process(url, limit):
                     # Part 4: Author Contact Details (Cache-enabled)
                     author_key = final_author.strip().lower()
                     if author_key not in author_cache:
-                        print(f"  Enriching Author: {final_author}")
                         author_info = await author_scraper.find_author_details(context, final_author)
                         author_cache[author_key] = author_info
                     
@@ -149,11 +155,21 @@ async def run_scrape_process(url, limit):
                 except Exception as e:
                     title = book.get('Book Title', 'N/A')
                     print(f"Tab error for {title.encode('ascii', 'ignore').decode('ascii')}: {e}")
-                    # Ensure the error dict also has the (possibly normalized) URL
-                    return {**book, "Description": "Error", "Publisher": "Error", "Publication Date": "Error"}
+                    return {**book, "Description": "Error"}
         
-        tasks = [limited_tab_scrape(book) for book in book_list]
-        final_results = await asyncio.gather(*tasks)
+        # --- CHUNKED PROCESSING FOR AUTO-SAVE (Every 100 books) ---
+        chunk_size = 100
+        for i in range(0, total_books, chunk_size):
+            chunk = book_list[i:i + chunk_size]
+            print(f"\nProcessing Batch {i//chunk_size + 1} ({len(chunk)} books)...")
+            
+            chunk_tasks = [limited_tab_scrape(book) for book in chunk]
+            chunk_results = await asyncio.gather(*chunk_tasks)
+            final_results.extend(chunk_results)
+            
+            # Auto-save intermediate results
+            temp_path = save_to_excel(final_results, "scraped_data_recovery.xlsx")
+            print(f"  [Auto-Save] Intermediate progress saved to {temp_path}")
 
         # PART 3: AUTOMATED DEEP SWEEP (PHASE 2)
         print("\n" + "="*40)
@@ -166,9 +182,8 @@ async def run_scrape_process(url, limit):
         df_results = pd.DataFrame(final_results)
         df_final = await perform_deep_repair(df_results, context)
         
-        # We return the perfected dict list
+        # Final Return
         final_perfected = df_final.to_dict('records')
-        
         await browser.close()
         return final_perfected
 

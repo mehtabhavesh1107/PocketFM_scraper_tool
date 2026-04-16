@@ -75,276 +75,161 @@ class AmazonScraper:
 
             try:
                 # 'load' waits for full page including any redirect chains
+                print(f"Opening Amazon: {url}")
                 await page.goto(url, wait_until="load", timeout=60000)
 
-                # Wait for network to settle (redirect chains, CAPTCHA checks)
+                # --- AMAZON LOGIN GATE ---
+                print("\n" + "!" * 60)
+                print("  ACTION REQUIRED: MANUALLY CLEAR AMAZON BLOCKS")
+                print("  1. Solve any CAPTCHAs if they appear.")
+                print("  2. Ensure you are on the correct Bestseller page.")
+                print("  The automation will begin once the search bar is visible.")
+                print("!" * 60 + "\n")
+
                 try:
-                    await page.wait_for_load_state("networkidle", timeout=15000)
+                    # Wait for Search bar or Logo as proof of page loading
+                    await page.wait_for_selector('#twotabsearchtextbox, #nav-logo-sprites', timeout=300000)
+                    print("  [OK] Amazon page confirmed. Starting Deep Scan...")
                 except Exception:
-                    pass
+                    print("  [Time Out] Login wait exceeded. Attempting to proceed...")
 
-                # Confirm the bestseller grid is actually present
-                try:
-                    await page.wait_for_selector(
-                        '[data-asin], .zg-grid-general-faceout',
-                        timeout=20000
-                    )
-                except Exception:
-                    print("Warning: bestseller grid not found - page may be CAPTCHA or redirect")
+                unique_results = []
+                seen_asin = set()
+                page_num = 1
 
-                # Scroll to trigger lazy-loading
-                try:
-                    await page.evaluate("""async () => {
-                        await new Promise((resolve) => {
-                            let totalHeight = 0;
-                            let distance = 100;
-                            let timer = setInterval(() => {
-                                let scrollHeight = document.body.scrollHeight;
-                                window.scrollBy(0, distance);
-                                totalHeight += distance;
-                                if (totalHeight >= scrollHeight) {
-                                    clearInterval(timer);
-                                    resolve();
-                                }
-                            }, 100);
-                        });
-                    }""")
-                    await asyncio.sleep(1)
-                except Exception as scroll_err:
-                    print(f"Scroll skipped: {scroll_err}")
-
-                try:
-                    await page.wait_for_load_state("networkidle", timeout=8000)
-                except Exception:
-                    pass
-
-                # --- Item selection ---
-                # [data-asin] is the broadest selector but guaranteed to hit every book card.
-                # We skip items with no title (those are outer wrapper divs, not book cards).
-                # Final deduplication is done by Book Title to remove any remaining duplicates.
-                items = await page.query_selector_all('[data-asin]')
-                print(f"Found {len(items)} [data-asin] elements on page")
-
-                results = []
-
-                for item in items:
-                    # --- Best Effort Title Extraction ---
-                    # 1. Try specific bestseller title classes
-                    title_el = await item.query_selector('.p13n-sc-untruncated-desktop-title, ._cDE_gridItem_truncate-title')
-                    raw_title = ""
-                    if title_el:
-                        raw_title = clean_text(await title_el.inner_text())
+                while len(unique_results) < limit:
+                    print(f"\nScanning Amazon Page {page_num} (Total gathered: {len(unique_results)})...")
                     
-                    # 2. High-reliability fallback: Image alt text
-                    if not raw_title or "formats available" in raw_title.lower() or re.search(r'(INR|USD|\$|£|€|₹|Rs\.?)\s*[\d,\.]+', raw_title, re.IGNORECASE):
-                        img_el = await item.query_selector('img')
-                        if img_el:
-                            alt_val = await img_el.get_attribute('alt')
-                            if alt_val:
-                                # Sometimes alt text is just 'image' or 'poster', we need to check length
-                                if len(alt_val) > 3:
+                    # Scroll to trigger lazy-loading
+                    try:
+                        await page.evaluate("""async () => {
+                            await new Promise((resolve) => {
+                                let totalHeight = 0;
+                                let distance = 100;
+                                let timer = setInterval(() => {
+                                    let scrollHeight = document.body.scrollHeight;
+                                    window.scrollBy(0, distance);
+                                    totalHeight += distance;
+                                    if (totalHeight >= scrollHeight) {
+                                        clearInterval(timer);
+                                        resolve();
+                                    }
+                                }, 100);
+                            });
+                        }""")
+                        await asyncio.sleep(1)
+                    except Exception as scroll_err:
+                        print(f"Scroll skipped: {scroll_err}")
+
+                    try:
+                        await page.wait_for_load_state("networkidle", timeout=8000)
+                    except Exception:
+                        pass
+
+                    # --- Item selection ---
+                    items = await page.query_selector_all('[data-asin]')
+                    
+                    for item in items:
+                        asin = await item.get_attribute('data-asin')
+                        if not asin or asin in seen_asin or asin == "N/A":
+                            continue
+                        
+                        # --- Title Extraction ---
+                        title_el = await item.query_selector('.p13n-sc-untruncated-desktop-title, ._cDE_gridItem_truncate-title')
+                        raw_title = ""
+                        if title_el:
+                            raw_title = clean_text(await title_el.inner_text())
+                        
+                        if not raw_title:
+                            img_el = await item.query_selector('img')
+                            if img_el:
+                                alt_val = await img_el.get_attribute('alt')
+                                if alt_val and len(alt_val) > 3:
                                     raw_title = clean_text(alt_val)
 
-                    if not raw_title:
-                        continue
-                    
-                    # Reject if title is still junk (price only or 'formats available')
-                    if re.search(r'(INR|USD|\$|£|€|₹|Rs\.?)\s*[\d,\.]+', raw_title, re.IGNORECASE) or \
-                       re.match(r'^[\d,\.]+$', raw_title) or \
-                       "formats available" in raw_title.lower():
-                        continue
-
-                    # ====== RANK EXTRACTION (cascade, same pattern as author) ======
-                    rank_text = "N/A"
-
-                    # Strategy 1: known Amazon rank badge selectors
-                    for rank_sel in [
-                        '.zg-bdg-text',                    # Classic bestseller badge
-                        '.p13n-sc-badge-label-size-base',  # New UI badge
-                        'span.zg-badge-text',              # Alt class
-                        '[class*="badge"] span',           # Generic badge span
-                        '[class*="rank"]',                 # Any rank element
-                        'span.a-size-base.a-color-secondary.a-text-bold',  # Bold rank number
-                    ]:
-                        el = await item.query_selector(rank_sel)
-                        if el:
-                            t = clean_text(await el.inner_text())
-                            # Must look like a rank: #1, 1, No. 1, etc.
-                            if t and re.search(r'\d', t):
-                                rank_text = t.lstrip('#').strip()
-                                break
-
-                    # Strategy 2: JS scan -- find a small element whose text is just a number
-                    if rank_text == "N/A":
-                        try:
-                            js_rank = await item.evaluate("""(el) => {
-                                const spans = el.querySelectorAll('span, div');
-                                for (const s of spans) {
-                                    const txt = (s.textContent || '').trim();
-                                    // Rank is typically a 1-2 digit number, maybe prefixed with #
-                                    if (/^#?\\d{1,2}$/.test(txt)) return txt.replace('#','').trim();
-                                }
-                                return null;
-                            }""")
-                            if js_rank:
-                                rank_text = js_rank
-                        except Exception:
-                            pass
-                    rating_el  = await item.query_selector('.a-icon-star-small .a-icon-alt, [class*="star"]')
-                    reviews_el = await item.query_selector('[aria-label*="ratings"], [aria-label*="reviews"]')
-                    price_el   = await item.query_selector('.p13n-sc-price, [class*="price"]')
-                    link_el    = await item.query_selector('a.a-link-normal[href*="/dp/"], a.a-link-normal')
-
-                    # ====== AUTHOR EXTRACTION (5-strategy cascade) ======
-                    author_name = "N/A"
-
-                    # Strategy 1: Amazon author links (multiple patterns for .com, .in, etc.)
-                    for author_selector in [
-                        'a[href*="/e/"]',                    # Amazon author page (/e/BXXXXXX)
-                        'div.a-row.a-size-small a',           # "by Author" row link
-                        '.a-row a.a-link-normal',             # Generic row link
-                        'span.a-size-small.a-color-base + a', # Span "by" followed by author link
-                        '[class*="contributor"] a',
-                        '[class*="author"] a',
-                    ]:
-                        try:
-                            el = await item.query_selector(author_selector)
-                            if el:
-                                text = clean_text(await el.inner_text())
-                                # Reject if it looks like a rating, price, or generic text
-                                if (text and text != "N/A" and len(text) > 1
-                                    and not re.match(r'^[\d\.\$,]+$', text)
-                                    and 'out of' not in text.lower()
-                                    and 'stars' not in text.lower()
-                                    and 'star' not in text.lower()
-                                    and 'ratings' not in text.lower()):
-                                    author_name = text
-                                    break
-                        except Exception:
+                        if not raw_title or "formats available" in raw_title.lower():
                             continue
 
-                    # Strategy 2: JS-based -- get text of all a.size-small rows and find "by" pattern
-                    if not author_name or author_name == "N/A":
-                        try:
-                            js_author = await item.evaluate("""(el) => {
-                                // Look for 'by Author' pattern in the card's text nodes
-                                const rows = el.querySelectorAll('.a-row, .a-size-small, div');
-                                for (const row of rows) {
-                                    const txt = row.textContent || '';
-                                    const m = txt.match(/\\bby\\s+([A-Z][A-Za-z .'-]+)/i);
-                                    if (m && m[1].trim().length > 2) {
-                                        // Verify it's not a price or rating
-                                        const candidate = m[1].trim();
-                                        if (!/^[\\d.$,]+$/.test(candidate)) return candidate;
-                                    }
-                                }
-                                // Fallback: look in anchor text that's not a title or price
-                                const links = el.querySelectorAll('a.a-link-normal');
-                                for (const link of links) {
-                                    const href = link.getAttribute('href') || '';
-                                    const txt = (link.textContent || '').trim();
-                                    if (href.includes('/e/') && txt.length > 1) return txt;
-                                }
-                                return null;
-                            }""")
-                            if js_author:
-                                author_name = clean_text(js_author)
-                        except Exception:
-                            pass
+                        # --- Rank Extraction ---
+                        rank_text = "N/A"
+                        for rank_sel in ['.zg-bdg-text', '.p13n-sc-badge-label-size-base', 'span.zg-badge-text']:
+                            el = await item.query_selector(rank_sel)
+                            if el:
+                                t = clean_text(await el.inner_text())
+                                if t and re.search(r'\d', t):
+                                    rank_text = t.lstrip('#').strip()
+                                    break
 
-                    # Strategy 3: parse "by [Author]" from the title text itself
-                    if not author_name or author_name == "N/A":
-                        by_match = re.search(
-                            r'\bby\s+([A-Z][^\|,\[\]]+?)(?:\s*[\|,\[]|$)',
-                            raw_title, re.IGNORECASE
-                        )
-                        if by_match:
-                            author_name = by_match.group(1).strip()
+                        # --- Basic Data ---
+                        rating_el  = await item.query_selector('.a-icon-star-small .a-icon-alt, [class*="star"]')
+                        reviews_el = await item.query_selector('[aria-label*="ratings"], [aria-label*="reviews"]')
+                        link_el    = await item.query_selector('a.a-link-normal[href*="/dp/"], a.a-link-normal')
 
-                    # Strategy 4: scan the full card text for "by [Name]" pattern
-                    if not author_name or author_name == "N/A":
-                        try:
-                            item_text = clean_text(await item.inner_text())
-                            by_match = re.search(
-                                r'\bby\s+([A-Z][A-Za-z\s\.\-\']+?)(?:\s*[\|\n,;(]|\d|$)',
-                                item_text
-                            )
-                            if by_match:
-                                candidate = by_match.group(1).strip()
-                                if not re.match(r'^[\d\.]+$', candidate) and len(candidate) > 2:
-                                    author_name = candidate
-                        except Exception:
-                            pass
+                        # --- Author Extraction ---
+                        author_name = "N/A"
+                        for author_selector in ['a[href*="/e/"]', 'div.a-row.a-size-small a', '[class*="author"] a']:
+                            try:
+                                el = await item.query_selector(author_selector)
+                                if el:
+                                    text = clean_text(await el.inner_text())
+                                    if text and len(text) > 1 and not re.match(r'^[\d\.\$,]+$', text):
+                                        author_name = text
+                                        break
+                            except: continue
 
-                    # ====== ASIN & URL EXTRACTION ======
-                    asin = await item.get_attribute('data-asin')
-                    if not asin:
-                        # Fallback: try to find an element with data-asin
-                        asin_el = await item.query_selector('[data-asin]')
-                        if asin_el:
-                            asin = await asin_el.get_attribute('data-asin')
+                        # URL Extraction
+                        raw_href = ""
+                        if link_el:
+                            try: raw_href = await link_el.evaluate("el => el.href")
+                            except: raw_href = await link_el.get_attribute('href')
 
-                    # Extract absolute href using el.href property (resolves relative links automatically)
-                    raw_href = ""
-                    if link_el:
-                        try:
-                            raw_href = await link_el.evaluate("el => el.href")
-                        except Exception:
-                            raw_href = await link_el.get_attribute('href')
+                        amazon_url = raw_href
+                        if asin:
+                            if raw_href and raw_href.startswith('http'):
+                                domain = "/".join(raw_href.split("/", 3)[:3])
+                                amazon_url = f"{domain}/dp/{asin}"
+                            else:
+                                amazon_url = f"/dp/{asin}"
 
-                    # Normalize: cleanest URL is /dp/ASIN. 
-                    # If we have an absolute href but it's relative, we prefix the base domain later in app.py.
-                    # But if we have ASIN, we can build a clean one.
-                    amazon_url = raw_href
-                    if asin and asin != "N/A":
-                        # If we have an absolute URL, use its domain. If not, construct relative for app.py to fix.
-                        if raw_href and raw_href.startswith('http'):
-                            domain = "/".join(raw_href.split("/", 3)[:3])
-                            amazon_url = f"{domain}/dp/{asin}"
-                        else:
-                            amazon_url = f"/dp/{asin}"
-                    elif not raw_href:
-                        amazon_url = "N/A"
+                        # Reviews count
+                        reviews_count = 0
+                        if reviews_el:
+                            aria = await reviews_el.get_attribute('aria-label') or ""
+                            m = re.search(r'stars?,?\s*([\d,]+)\s*ratings?', aria, re.IGNORECASE)
+                            if m: reviews_count = int(m.group(1).replace(',', ''))
 
-                    # Reviews — extract the count (not the rating) from aria-label
-                    # aria-label looks like: "4.7 out of 5 stars, 1,234 ratings"
-                    reviews_count = 0
-                    if reviews_el:
-                        aria = await reviews_el.get_attribute('aria-label') or ""
-                        if not aria:
-                            aria = clean_text(await reviews_el.inner_text())
-                        # Try to grab the number AFTER "stars," or just the last standalone number
-                        m = re.search(r'stars?,?\s*([\d,]+)\s*ratings?', aria, re.IGNORECASE)
-                        if m:
-                            reviews_count = int(m.group(1).replace(',', ''))
-                        else:
-                            # Fallback: grab any number that looks like a review count (> 10)
-                            nums = re.findall(r'[\d,]+', aria)
-                            counts = [int(n.replace(',', '')) for n in nums if int(n.replace(',', '')) > 10]
-                            if counts:
-                                reviews_count = max(counts)
+                        unique_results.append({
+                            "Rank":              rank_text,
+                            "Book Title":        raw_title,
+                            "Author Name":       author_name,
+                            "Rating":            clean_numeric(await rating_el.inner_text()) if rating_el else 0,
+                            "Number of Reviews": reviews_count,
+                            "Price":             "N/A",
+                            "Amazon URL":        amazon_url
+                        })
+                        seen_asin.add(asin)
+                        
+                        if len(unique_results) >= limit:
+                            break
 
-                    results.append({
-                        "Rank":              rank_text,
-                        "Book Title":        raw_title,
-                        "Author Name":       author_name,
-                        "Rating":            clean_numeric(await rating_el.inner_text()) if rating_el else 0,
-                        "Number of Reviews": reviews_count,
-                        "Price":             "N/A",  # Will be enriched from product page
-                        "Amazon URL":        amazon_url
-                    })
+                    if len(unique_results) >= limit:
+                        break
 
-                # Deduplicate by Book Title (handles wrapper vs card on same product)
-                seen_titles = set()
-                unique_results = []
-                for r in results:
-                    t = r["Book Title"]
-                    if t not in seen_titles:
-                        seen_titles.add(t)
-                        unique_results.append(r)
+                    # --- PAGINATION: Next Page ---
+                    next_button = await page.query_selector('li.a-last a')
+                    if next_button:
+                        print("Navigating to Next Page...")
+                        await next_button.click()
+                        page_num += 1
+                        # Wait for next page scan proof
+                        await page.wait_for_selector('[data-asin]', timeout=30000)
+                        await asyncio.sleep(3) # Anti-bot delay
+                    else:
+                        print("No more pages found.")
+                        break
 
-                print(f"Raw: {len(results)} items | After dedup: {len(unique_results)} unique books")
-                return unique_results[:limit]
+                print(f"Total books gathered: {len(unique_results)}")
+                return unique_results
 
             finally:
                 await browser.close()
