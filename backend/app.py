@@ -1,11 +1,12 @@
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
-import asyncio
 import sys
 import os
 
 # Ensure the current directory is in the path for module imports
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+
+from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
+import asyncio
 
 from scraper import AmazonScraper, GoodreadsScraper, AuthorScraper
 from excel_utility import save_to_excel

@@ -3,14 +3,8 @@
         "backend"
     ],
     "extraPaths": [
-        "./backend"
+        "backend"
     ],
-    "venvPath": "./backend",
-    "venv": "venv",
-    "executionEnvironments": [
-        {
-            "root": "backend",
-            "pythonVersion": "3.12"
-        }
-    ]
+    "pythonVersion": "3.12",
+    "typeCheckingMode": "basic"
 }
