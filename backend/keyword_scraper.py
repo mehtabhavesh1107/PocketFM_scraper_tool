@@ -8,11 +8,11 @@ from excel_utility import save_to_excel
 from playwright.async_api import async_playwright
 
 # Configuration
-STATE_FILE = "keyword_state.json"
-OUTPUT_FILE = "../scraped_data_keywords.xlsx"
+STATE_FILE = "keyword_state_paranormal.json"
+OUTPUT_FILE = "../scraped_data_paranormal.xlsx"
 BATCH_SIZE = 50
 MAX_TABS = 12
-SEARCH_URL = "https://www.amazon.com/s?k=fantasy+romance&i=stripbooks&crid=28AEJRI2U74G8&qid=1776231644&sprefix=fantasy+romance%2Cstripbooks%2C364&xpid=roloQs4pN_CDY&ref=sr_pg_1"
+SEARCH_URL = "https://www.amazon.com/s?k=Paranormal+Romance&i=stripbooks&crid=2MOWCGE10UUZ2&sprefix=paranormal+romance%2Cstripbooks%2C349&ref=nb_sb_noss_1"
 
 COLUMNS = [
     "Sub_Genre", "Price_Tier", "Amazon URL", "Book Title", "Book Number in Series",

@@ -18,12 +18,12 @@ from scraper import GoodreadsScraper, clean_numeric
 from excel_utility import save_to_excel
 
 # Configuration
-INPUT_FILE = "../scraped_data.xlsx"
-OUTPUT_FILE = "../scraped_data.xlsx" 
-START_EXCEL_ROW = 1  # FINAL industrial Sweep (1-500) - Total Coverage
-CHECK_COLUMN = "GoodReads_Book_Rating" 
-MAX_CONCURRENT_TABS = 15  # Full Multi-Threading
-BATCH_LIMIT = 501         # Process 1 to 500
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+INPUT_FILE = os.path.join(BASE_DIR, "../scraped_data_keywords.xlsx")
+OUTPUT_FILE = os.path.join(BASE_DIR, "../scraped_data_keywords.xlsx") 
+START_EXCEL_ROW = 0  # Re-scan the entire file from the top
+MAX_CONCURRENT_TABS = 15
+BATCH_LIMIT = 2000         # Process every possible missing row
 
 def extract_asin(url):
     """Extract ASIN from Amazon URL."""
