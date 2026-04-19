@@ -16,3 +16,9 @@ scraped_data.xlsx
 .vscode/
 .idea/
 .DS_Store
+
+# Debug & Scraper State
+*_debug.html
+goodreads_*.html
+backend/scratch/
+keyword_state_*.json
