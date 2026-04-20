@@ -19,11 +19,11 @@ from excel_utility import save_to_excel
 
 # Configuration
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-INPUT_FILE = os.path.join(BASE_DIR, "../scraped_data_keywords.xlsx")
-OUTPUT_FILE = os.path.join(BASE_DIR, "../scraped_data_keywords.xlsx") 
-START_EXCEL_ROW = 0  # Re-scan the entire file from the top
+INPUT_FILE = r"e:\Internship\scraped_data_paranormal.xlsx"
+OUTPUT_FILE = r"e:\Internship\scraped_data_paranormal.xlsx" 
+START_EXCEL_ROW = 502  # Focus on index 500 onwards
 MAX_CONCURRENT_TABS = 15
-BATCH_LIMIT = 2000         # Process every possible missing row
+BATCH_LIMIT = 1000         # Sweep everything till the end
 
 def extract_asin(url):
     """Extract ASIN from Amazon URL."""
@@ -40,7 +40,8 @@ async def repair_row(index, row, context, semaphore, gr_scraper, df, total_missi
         await asyncio.sleep(random.uniform(0.5, 3.0))
         
         title = str(row["Book Title"])
-        author = str(row["Author Name"])
+        author_raw = row.get("Author Name", "N/A")
+        author = str(author_raw) if pd.notna(author_raw) and str(author_raw).lower() != "nan" else ""
         amazon_url = str(row.get("Amazon URL", "N/A"))
         asin = extract_asin(amazon_url)
         
@@ -143,8 +144,8 @@ async def perform_deep_repair(df, context):
         ]
         
         for col in target_cols:
-            v = row.get(col, "N/A")
-            if pd.isna(v) or str(v).strip() == "N/A" or str(v).strip() == "":
+            v = row.get(col)
+            if pd.isna(v) or str(v).strip().lower() in ["n/a", "", "nan", "none"]:
                 return True
         
         return False
