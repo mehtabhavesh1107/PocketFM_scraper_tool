@@ -28,9 +28,26 @@ def clean_numeric(text):
     return 0
 
 
+def extract_series_from_title(title):
+    """Matches patterns like (Series Name #1) or (Series Name Book 1)."""
+    if not title: return None
+    match = re.search(r'\((.*?)(?:\s+#?\d+|\s+Book\s+\d+)?\)', title, re.IGNORECASE)
+    if match:
+        name = match.group(1).strip()
+        # Clean up common garbage at end of series name in title
+        name = re.sub(r'[\s#]+$', '', name)
+        return name if len(name) > 2 else None
+    return None
+
 def normalize_title_for_search(title):
     if not title:
         return ""
+    # 1. Clean de-duplication (e.g. "Title Title" -> "Title")
+    words = title.split()
+    half = len(words) // 2
+    if len(words) >= 4 and words[:half] == words[half:]:
+        title = " ".join(words[:half])
+    
     # Standard cleanup
     t = title.lower()
     
@@ -41,12 +58,11 @@ def normalize_title_for_search(title):
         r':\s+a\s+memoir.*',
         r'\(deluxe\s+edition\).*',
         r'\(special\s+edition\).*',
-        r'\(.*book\s+\d+.*\)', # Remove (Series Name Book 1)
-        r'\(.*series.*\)',
-        r'\[.*\]', # Remove [Brackets]
-        r'book\s+\d+.*', # Remove standalone Book 1
-        r'\d+\s+of\s+\d+.*', # Remove 1 of 3
-        r'a\s+dark\s+fantasy.*', # Remove genre tags
+        r'\'s\s+broken\s+mate',
+        r'\[.*\]', 
+        r'book\s+\d+.*',
+        r'\d+\s+of\s+\d+.*',
+        r'a\s+dark\s+fantasy.*',
         r'an\s+addictive\s+fantasy.*',
     ]
     
@@ -734,6 +750,10 @@ class GoodreadsScraper:
         try:
             book_url = None
             
+            # --- NEW: Series Extraction from Title ---
+            # If the user-provided title contains series info in (), use it for priority search
+            extracted_series = extract_series_from_title(title)
+            
             # --- TIER 0: Existing URL Strategy (User Requested Verification) ---
             if existing_url and str(existing_url).startswith("http") and "goodreads.com" in str(existing_url):
                 # Check if we need a rating but only have a series URL
@@ -744,6 +764,23 @@ class GoodreadsScraper:
                 
                 print(f"  Goodreads: Discovery Tier 0 (Existing URL: {existing_url})...")
                 book_url = existing_url
+            
+            # --- TIER 0.5: Extracted Series Search ---
+            if not book_url and extracted_series:
+                print(f"  Goodreads: Discovery Tier 0.5 (Extracted Series: {extracted_series})...")
+                try:
+                    search_query = f"{extracted_series} {author} series goodreads"
+                    search_url = f"https://www.goodreads.com/search?q={search_query.replace(' ', '+')}"
+                    await page.goto(search_url, wait_until="domcontentloaded", timeout=30000)
+                    
+                    # Look for a /series/ link first
+                    series_link = await page.query_selector('a[href*="/series/"]')
+                    if series_link:
+                        # If we find a series link, we'll navigate to it later in step 2
+                        book_url = await series_link.evaluate("el => el.href")
+                        print(f"  Goodreads: Found series via Tier 0.5: {book_url}")
+                except Exception:
+                    pass
             
             # --- TIER 1: Direct ID Strategy (Most Reliable) ---
             if not book_url:
@@ -1112,7 +1149,8 @@ class GoodreadsScraper:
                 '[data-testid="bookTitle"] + .Text + a[href*="/series/"]',
                 '.BookPageMetadataSection__title + .Text a[href*="/series/"]',
                 'a.SeriesLink',
-                '[data-testid="series"] a'
+                '[data-testid="series"] a',
+                '.BookSeries .a[href*="/series/"]' # Legacy/Misc
             ]
             
             for sel in selectors:
@@ -1128,23 +1166,32 @@ class GoodreadsScraper:
                 except Exception:
                     continue
 
-            # Fallback JS scan (Deep Scan)
+            # --- TARGETED SERIES DISCOVERY (FALLBACK SEARCH) ---
+            if series_url == "N/A":
+                print(f"    Intelligence: No series link on book page. Triggering Targeted Series Search for '{title[:20]}'")
+                try:
+                    search_query = f"{normalize_title_for_search(title)} {author} series goodreads"
+                    series_search_url = f"https://www.goodreads.com/search?q={search_query.replace(' ', '+')}"
+                    s_page = await context.new_page()
+                    await s_page.goto(series_search_url, wait_until="domcontentloaded", timeout=45000)
+                    
+                    # Look for links that contain "/series/" but ARE NOT "/book/show"
+                    series_link = await s_page.query_selector('a[href*="/series/"]')
+                    if series_link:
+                        series_url = await series_link.evaluate("el => el.href")
+                        series_name = clean_text(await series_link.inner_text())
+                        print(f"      -> SUCCESS: Series discovered via targeted search: {series_url}")
+                    await s_page.close()
+                except Exception as s_exc:
+                    print(f"      -> Targeted Series Search failed: {s_exc}")
+
+            # Final Fallback JS scan (Deep Scan)
             if series_url == "N/A":
                 print("    Intelligence: Falling back to Deep JS Scan for series...")
                 series_data = await page.evaluate("""() => {
                     const links = Array.from(document.querySelectorAll('a[href*="/series/"]'));
                     if (links.length > 0) {
                         return { url: links[0].href, name: links[0].innerText.trim() };
-                    }
-                    // Try to find the word 'Series' and look for a link near it
-                    const spans = Array.from(document.querySelectorAll('span, div, b'));
-                    for (const s of spans) {
-                        if (s.innerText && s.innerText.toLowerCase().includes('series')) {
-                            const link = s.querySelector('a') || (s.parentElement ? s.parentElement.querySelector('a') : null);
-                            if (link && link.href.includes('/series/')) {
-                                return { url: link.href, name: link.innerText.trim() };
-                            }
-                        }
                     }
                     return null;
                 }""")

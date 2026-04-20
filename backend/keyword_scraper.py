@@ -3,16 +3,16 @@ import json
 import os
 import pandas as pd
 import re
-from scraper import AmazonScraper, GoodreadsScraper, AuthorScraper, clean_text
+from scraper import AmazonScraper, GoodreadsScraper, AuthorScraper, clean_text, normalize_title_for_search
 from excel_utility import save_to_excel
 from playwright.async_api import async_playwright
 
 # Configuration
-STATE_FILE = "keyword_state_paranormal.json"
-OUTPUT_FILE = "../scraped_data_paranormal.xlsx"
+STATE_FILE = "keyword_state_shifters.json"
+OUTPUT_FILE = "../scraped_data_shifters.xlsx"
 BATCH_SIZE = 50
 MAX_TABS = 12
-SEARCH_URL = "https://www.amazon.com/s?k=Paranormal+Romance&i=stripbooks&crid=2MOWCGE10UUZ2&sprefix=paranormal+romance%2Cstripbooks%2C349&ref=nb_sb_noss_1"
+SEARCH_URL = "https://www.amazon.com/s?k=Werewolves+%26+Shifters&i=stripbooks&crid=1VFS1NEXMRVWD&sprefix=werewolves+%26+shifters%2Cstripbooks%2C432&ref=nb_sb_noss_1"
 
 COLUMNS = [
     "Sub_Genre", "Price_Tier", "Amazon URL", "Book Title", "Book Number in Series",
@@ -128,141 +128,140 @@ async def process_book(context, book_data):
 
 async def run_keyword_mission():
     state = load_state()
-    print(f"--- STARTING INTEGRATED KEYWORD MISSION (AMAZON + GOODREADS): Round {state['next_batch_start']} to {state['next_batch_start'] + BATCH_SIZE - 1} ---")
+    # MISSION TARGET: Scale by another 1,000 titles
+    MISSION_TARGET = state['total_processed_global'] + 1000
+    
+    print(f"\n{'='*60}")
+    print(f"INDUSTRIAL SCALING MISSION: Target {MISSION_TARGET} Titles")
+    print(f"Current Progress: {state['total_processed_global']} | Starting from Page {state['last_page_scanned'] + 1}")
+    print(f"{'='*60}\n")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=False)
         context = await browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36"
         )
-        page = await context.new_page()
-
-        # Step 1: Discovery Phase (Collect 100 links)
-        print(f"Navigating to Amazon Search (Starting from Page {state['last_page_scanned'] + 1})...")
-        search_url = SEARCH_URL
-        if state['last_page_scanned'] > 0:
-            search_url += f"&page={state['last_page_scanned'] + 1}"
         
-        await page.goto(search_url, wait_until="load", timeout=60000)
-        
-        # --- NEW: Set US Location (90016) ---
-        amazon_scraper = AmazonScraper()
-        await amazon_scraper.set_amazon_location(page, "90016")
-        
-        all_discovery_links = []
-        page_count = state['last_page_scanned'] + 1
-        
-        while len(all_discovery_links) < BATCH_SIZE:
-            print(f"\n[Scanning Page {page_count}] INDUSTRIAL SCROLL to reveal all titles...")
+        while state['total_processed_global'] < MISSION_TARGET:
+            curr_batch_start = state['next_batch_start']
+            print(f"\n>>> [MISSION BATCH] Processing {curr_batch_start} to {curr_batch_start + BATCH_SIZE - 1}...")
             
-            # THE REVEAL: Fixed constant scroll to trigger lazy loading reliably
-            for i in range(6):
-                await page.evaluate("window.scrollBy(0, 1500)")
-                await asyncio.sleep(2.0)
+            page = await context.new_page()
             
-            await asyncio.sleep(2) 
-
-            # RESILIENT SELECTOR MATRIX (Broadest containers first)
-            items = await page.query_selector_all("[data-asin]")
-            found_this_page = 0
+            # --- Discovery Phase ---
+            print(f"  Navigating to Amazon Search (Page {state['last_page_scanned'] + 1})...")
+            search_url = SEARCH_URL
+            if state['last_page_scanned'] > 0:
+                search_url += f"&page={state['last_page_scanned'] + 1}"
             
-            for item in items:
-                asin = await item.get_attribute('data-asin')
-                if not asin or asin == "N/A" or len(asin) < 5: continue
+            try:
+                await page.goto(search_url, wait_until="load", timeout=60000)
                 
-                if any(x.get("asin") == asin for x in all_discovery_links):
-                    continue
-
-                # Multi-selector Matrix for Title and Link
-                title = "N/A"
-                href = None
+                amazon_scraper = AmazonScraper()
+                await amazon_scraper.set_amazon_location(page, "90016")
                 
-                # Try many common title locations
-                title_selectors = ["h2 a span", ".a-size-medium", ".a-size-base-plus", "h2 a", ".p13n-sc-truncate"]
-                for t_sel in title_selectors:
-                    try:
-                        t_el = await item.query_selector(t_sel)
-                        if t_el:
-                            title = clean_text(await t_el.inner_text())
-                            if title and title != "N/A": break
-                    except: continue
+                all_discovery_links = []
+                page_count = state['last_page_scanned'] + 1
+                seen_titles = [] # Reset for this batch to ensure fresh lookup
                 
-                # Try many common link locations
-                link_selectors = ["h2 a", "a.a-link-normal[href*='/dp/']", "a.a-link-normal:first-child"]
-                for l_sel in link_selectors:
-                    try:
-                        l_el = await item.query_selector(l_sel)
-                        if l_el:
-                            href = await l_el.evaluate("el => el.href")
-                            if href and "/dp/" in href: break
-                    except: continue
+                while len(all_discovery_links) < BATCH_SIZE:
+                    for i in range(6):
+                        await page.evaluate("window.scrollBy(0, 1500)")
+                        await asyncio.sleep(2.0)
+                    
+                    items = await page.query_selector_all("[data-asin]")
+                    found_this_page = 0
+                    
+                    for item in items:
+                        asin = await item.get_attribute('data-asin')
+                        if not asin or asin == "N/A" or len(asin) < 5: continue
+                        if any(x.get("asin") == asin for x in all_discovery_links): continue
 
-                if href and title != "N/A":
-                    all_discovery_links.append({
-                        "asin": asin,
-                        "Amazon URL": href,
-                        "Book Title": title
-                    })
-                    found_this_page += 1
+                        title = "N/A"
+                        title_selectors = ["h2 a span", ".a-size-medium", ".a-size-base-plus", "h2 a"]
+                        for t_sel in title_selectors:
+                            try:
+                                t_el = await item.query_selector(t_sel)
+                                if t_el:
+                                    title = clean_text(await t_el.inner_text())
+                                    if title and title != "N/A": break
+                            except: continue
+                        
+                        clean_title = normalize_title_for_search(title)
+                        if clean_title in seen_titles: continue
+
+                        href = None
+                        link_selectors = ["h2 a", "a.a-link-normal[href*='/dp/']"]
+                        for l_sel in link_selectors:
+                            try:
+                                l_el = await item.query_selector(l_sel)
+                                if l_el:
+                                    href = await l_el.evaluate("el => el.href")
+                                    if href and "/dp/" in href: break
+                            except: continue
+
+                        if href and title != "N/A":
+                            all_discovery_links.append({"asin": asin, "Amazon URL": href, "Book Title": title})
+                            seen_titles.append(clean_title)
+                            found_this_page += 1
+                        if len(all_discovery_links) >= BATCH_SIZE: break
+                    
+                    print(f"    -> Captured {found_this_page} titles. (Total: {len(all_discovery_links)})")
+
+                    if len(all_discovery_links) < BATCH_SIZE:
+                        next_btn = await page.query_selector('a.s-pagination-next')
+                        if next_btn:
+                            await next_btn.click()
+                            page_count += 1
+                            await asyncio.sleep(8)
+                        else: break
                 
-                if len(all_discovery_links) >= BATCH_SIZE: break
-            
-            print(f"  -> SUCCESS: Captured {found_this_page} titles from Page {page_count}. (Total: {len(all_discovery_links)})")
+                # --- Extraction Phase ---
+                final_rows = []
+                for i in range(0, len(all_discovery_links), MAX_TABS):
+                    batch = all_discovery_links[i : i + MAX_TABS]
+                    print(f"  Batch {i//MAX_TABS + 1}: Handling {len(batch)} titles...")
+                    tasks = [process_book(context, book) for book in batch]
+                    results = await asyncio.gather(*tasks, return_exceptions=True)
+                    valid = [res for res in results if isinstance(res, dict)]
+                    final_rows.extend(valid)
+                    save_to_excel(valid, OUTPUT_FILE)
 
-            if len(all_discovery_links) < BATCH_SIZE:
-                next_btn = await page.query_selector('a.s-pagination-next')
-                if next_btn:
-                    print(f"  Flipping to Search Page {page_count + 1}...")
-                    await next_btn.click()
-                    page_count += 1
-                    await asyncio.sleep(10) # High-safety delay for search pagination
-                else:
-                    print("  [End of Search] No more results found.")
-                    break
-        
-        print(f"\nDiscovery phase finished. Collected {len(all_discovery_links)} high-fidelity links.")
-        last_book = all_discovery_links[-1]["Book Title"] if all_discovery_links else "N/A"
-
-        # Step 2: Industrial Extraction Phase (Multi-tab)
-        final_rows = []
-        for i in range(0, len(all_discovery_links), MAX_TABS):
-            batch = all_discovery_links[i : i + MAX_TABS]
-            print(f"\nBatch Processor: Handling {i+1} to {min(i + MAX_TABS, len(all_discovery_links))} (Integrated Amazon + Goodreads + Author)...")
+                # --- State Sync ---
+                state['last_page_scanned'] = page_count
+                state['total_processed_global'] += len(final_rows)
+                state['next_batch_start'] += len(final_rows)
+                save_state(state)
+                
+                print(f"\n[OK] Batch Complete. Total Processed: {state['total_processed_global']}/{MISSION_TARGET}")
+                
+                # --- AUTO-OPEN (USER REQUESTED: Per Batch) ---
+                if os.name == 'nt' and os.path.exists(OUTPUT_FILE):
+                    print(f"  [Mission] Opening updated results for index {curr_batch_start}-{curr_batch_start+BATCH_SIZE-1}...")
+                    os.startfile(os.path.abspath(OUTPUT_FILE))
+                
+            except Exception as e:
+                print(f"[CRITICAL ERROR] Batch failed: {e}. Retrying after nap...")
+                await asyncio.sleep(60)
             
-            tasks = [process_book(context, book) for book in batch]
-            results = await asyncio.gather(*tasks, return_exceptions=True)
+            await page.close()
             
-            # Resilience Filter: Keep only valid dicts, log errors
-            valid_results = []
-            for res in results:
-                if isinstance(res, dict):
-                    valid_results.append(res)
-                else:
-                    print(f"  [Resilience] Handled extraction error: {res}")
-            
-            final_rows.extend(valid_results)
-
-            # Use the advanced excel utility for saving and formatting
-            save_to_excel(final_rows, OUTPUT_FILE)
-            print(f"  [Auto-Save] Synchronized and Formatted: {OUTPUT_FILE}")
-
-        # Step 3: Global State Sync
-        state['last_page_scanned'] = page_count
-        state['last_book_title'] = last_book
-        state['total_processed_global'] += len(final_rows)
-        state['next_batch_start'] += len(final_rows)
-        save_state(state)
+            if state['total_processed_global'] < MISSION_TARGET:
+                wait_time = 90
+                print(f"Cooling down for {wait_time}s to maintain industrial stealth...")
+                await asyncio.sleep(wait_time)
 
         await browser.close()
-        print(f"\n" + "="*50)
-        print(f"MISSION COMPLETE: High-Discovery Integrated Pass Finished!")
-        print(f"Total Processed: {len(final_rows)}")
-        print("="*50)
-
-        # Auto-Open Excel
-        if os.path.exists(OUTPUT_FILE) and os.name == 'nt':
-            print(f"\nOpening Excel: {OUTPUT_FILE}")
+        print(f"\n{'='*60}")
+        print(f"MISSION ACCOMPLISHED: {state['total_processed_global']} Titles Total.")
+        print(f"Final Data: {os.path.abspath(OUTPUT_FILE)}")
+        print(f"{'='*60}\n")
+        
+        if os.name == 'nt' and os.path.exists(OUTPUT_FILE):
             os.startfile(os.path.abspath(OUTPUT_FILE))
+
+if __name__ == "__main__":
+    asyncio.run(run_keyword_mission())
 
 if __name__ == "__main__":
     asyncio.run(run_keyword_mission())
