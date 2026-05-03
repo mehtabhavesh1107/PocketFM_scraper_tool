@@ -5,8 +5,11 @@
   "main": "index.js",
   "scripts": {
     "dev": "concurrently \"npm run dev-backend\" \"npm run dev-frontend\"",
-    "dev-backend": "cd backend && .\\venv\\Scripts\\python.exe app.py",
-    "dev-frontend": "cd frontend && npm run dev",
+    "dev-backend": "cd backend && py -m uvicorn app:app --reload --port 8000",
+    "dev-frontend": "cd frontend && npm run dev -- --host 127.0.0.1 --port 5173",
+    "dev-lan": "concurrently \"npm run dev-backend-lan\" \"npm run dev-frontend-lan\"",
+    "dev-backend-lan": "cd backend && py -m uvicorn app:app --reload --host 0.0.0.0 --port 8000",
+    "dev-frontend-lan": "cd frontend && npm run dev -- --host 0.0.0.0 --port 5173",
     "test": "echo \"Error: no test specified\" && exit 1"
   },
   "keywords": [],

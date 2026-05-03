@@ -201,11 +201,15 @@ async def repair_goodreads_data():
                 await login_page.wait_for_load_state("networkidle")
             
             # Use Amazon-style selectors for Goodreads login
-            if await login_page.locator("#ap_email").is_visible():
-                await login_page.fill("#ap_email", "noel.regis04@gmail.com")
-                await login_page.fill("#ap_password", "Noel@1024")
+            goodreads_email = os.getenv("GOODREADS_EMAIL")
+            goodreads_password = os.getenv("GOODREADS_PASSWORD")
+            if await login_page.locator("#ap_email").is_visible() and goodreads_email and goodreads_password:
+                await login_page.fill("#ap_email", goodreads_email)
+                await login_page.fill("#ap_password", goodreads_password)
                 await login_page.click("#signInSubmit")
                 print("  [Auto-Login] Credentials submitted...")
+            elif await login_page.locator("#ap_email").is_visible():
+                print("  [Auto-Login] GOODREADS_EMAIL/GOODREADS_PASSWORD not set; please log in manually.")
         except Exception as e:
             print(f"  [Auto-Login] Could not automate login: {e}")
 

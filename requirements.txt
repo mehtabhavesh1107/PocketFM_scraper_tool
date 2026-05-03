@@ -1,5 +1,14 @@
-flask
-flask-cors
+fastapi
+uvicorn
+sqlalchemy
 playwright
 pandas
 openpyxl
+python-multipart
+reportlab
+requests
+beautifulsoup4
+gspread
+google-auth
+python-dotenv
+ddgs
