@@ -28,6 +28,16 @@ HEADERS = {
 }
 
 
+def _is_amazon_host(host: str) -> bool:
+    normalized = (host or "").split(":", 1)[0].lower()
+    return (
+        normalized.startswith("amazon.")
+        or ".amazon." in normalized
+        or normalized == "amzn.com"
+        or normalized.endswith(".amzn.com")
+    )
+
+
 def _run_async(coro):
     try:
         return asyncio.run(coro)
@@ -84,7 +94,7 @@ def discover_amazon_books(url: str, max_results: int, *, on_progress: callable |
     if not url or not url.strip():
         raise ValueError("Amazon source URL is empty.")
     parsed = urlparse(url)
-    if parsed.scheme not in {"http", "https"} or "amazon." not in (parsed.netloc or ""):
+    if parsed.scheme not in {"http", "https"} or not _is_amazon_host(parsed.netloc or ""):
         raise ValueError(f"Not an Amazon URL: {url!r}")
 
     try:

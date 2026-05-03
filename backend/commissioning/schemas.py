@@ -7,6 +7,16 @@ from urllib.parse import urlparse
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 
+def _is_amazon_host(host: str) -> bool:
+    normalized = (host or "").split(":", 1)[0].lower()
+    return (
+        normalized.startswith("amazon.")
+        or ".amazon." in normalized
+        or normalized == "amzn.com"
+        or normalized.endswith(".amzn.com")
+    )
+
+
 class FieldDefinition(BaseModel):
     name: str
     label: str
@@ -121,8 +131,8 @@ class SourceLinkCreate(BaseModel):
         if not source_type:
             return value
         host = urlparse(value).netloc.lower()
-        if source_type == "amazon" and "amazon." not in host:
-            raise ValueError("Amazon source must use an amazon.* URL")
+        if source_type == "amazon" and not _is_amazon_host(host):
+            raise ValueError("Amazon source must use an amazon.* or amzn.com URL")
         if source_type == "goodreads" and "goodreads.com" not in host:
             raise ValueError("Goodreads source must use a goodreads.com URL")
         return value

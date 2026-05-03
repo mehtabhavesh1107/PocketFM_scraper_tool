@@ -6,6 +6,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import httpx
 
@@ -21,6 +22,7 @@ os.environ["COMMISSIONING_DATABASE_URL"] = f"sqlite:///{(TEST_ROOT / 'backend_da
 from app import app
 from commissioning.db import SessionLocal, engine, init_db
 from commissioning.models import Base, Batch, Book, Contact
+from commissioning.services.discovery_service import discover_amazon_books
 from commissioning.services.amazon_http import discover_amazon_items
 
 
@@ -57,11 +59,12 @@ class CommissioningApiTests(unittest.TestCase):
                 f"/api/batches/{batch['id']}/sources",
                 json=[
                     {"source_type": "amazon", "url": "https://www.amazon.com/list", "max_results": 0},
+                    {"source_type": "amazon", "url": "https://www.amzn.com/Best-Sellers-Mystery%2C-Thriller-Suspense/zgbs/books/18", "max_results": 0},
                     {"source_type": "goodreads", "url": "https://www.goodreads.com/list/show/1", "max_results": 0},
                 ],
             )
             self.assertEqual(sources.status_code, 200)
-            self.assertEqual(len(sources.json()), 2)
+            self.assertEqual(len(sources.json()), 3)
 
             schema = await self._request("GET", "/api/reference-schema")
             self.assertEqual(schema.status_code, 200)
@@ -70,6 +73,12 @@ class CommissioningApiTests(unittest.TestCase):
         import asyncio
 
         asyncio.run(run())
+
+    def test_amzn_short_domain_supported_by_discovery_service(self):
+        with patch("commissioning.services.discovery_service.discover_amazon_records", return_value=[{"title": "Short Domain"}]):
+            records = discover_amazon_books("https://www.amzn.com/Best-Sellers-Mystery%2C-Thriller-Suspense/zgbs/books/18", 1)
+
+        self.assertEqual(records, [{"title": "Short Domain"}])
 
     def test_missing_batch_is_auto_created_for_cloud_storage_recovery(self):
         async def run():
