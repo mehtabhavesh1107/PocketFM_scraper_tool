@@ -186,6 +186,35 @@ class AmazonHttpParserTests(unittest.TestCase):
         self.assertEqual(detail.detail_asin, "B0KINDLE01")
         self.assertEqual(detail.publisher, "Knopf")
 
+    def test_thin_plain_dp_falls_through_to_rich_route(self):
+        calls = []
+
+        def fake_fetch(url: str, *, retries: int = 2) -> str:
+            calls.append(url)
+            if url == "https://www.amazon.com/dp/B0782X86CP":
+                return "<html><head><title>Amazon shell</title></head><body>continue</body></html>"
+            if url == "https://www.amazon.com/-/dp/B0782X86CP":
+                raise AmazonScrapeError("server error")
+            if url == "https://www.amazon.com/gp/aw/d/B0782X86CP":
+                return KINDLE_HTML
+            raise AssertionError(f"unexpected URL {url}")
+
+        with patch("commissioning.services.amazon_http._fetch", side_effect=fake_fetch):
+            detail = fetch_amazon_detail("https://www.amazon.com/dp/B0782X86CP")
+
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertEqual(
+            calls[:3],
+            [
+                "https://www.amazon.com/dp/B0782X86CP",
+                "https://www.amazon.com/-/dp/B0782X86CP",
+                "https://www.amazon.com/gp/aw/d/B0782X86CP",
+            ],
+        )
+        self.assertEqual(detail.title, "Switch Book")
+        self.assertEqual(detail.publisher, "Knopf")
+
     def test_incomplete_asin_detail_is_retried_before_export(self):
         item = AmazonItem(
             asin="B0BAD00001",

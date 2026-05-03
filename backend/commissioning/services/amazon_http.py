@@ -39,6 +39,7 @@ REQUEST_TIMEOUT = 25
 PAGE_DELAY_SECONDS = 0.6
 MAX_PAGES_PER_SOURCE = 100  # safety ceiling — Amazon search caps at ~7 pages anyway
 DEFAULT_RESULT_CEILING = 5000
+DETAIL_THIN_HTML_BYTES = 50_000
 
 
 def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int = 24) -> int:
@@ -57,8 +58,8 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0, maximum: floa
     return max(minimum, min(value, maximum))
 
 
-AMAZON_DETAIL_WORKERS = _env_int("AMAZON_DETAIL_WORKERS", 1, maximum=12)
-AMAZON_DETAIL_RETRY_ROUNDS = _env_int("AMAZON_DETAIL_RETRY_ROUNDS", 2, minimum=0, maximum=5)
+AMAZON_DETAIL_WORKERS = _env_int("AMAZON_DETAIL_WORKERS", 4, maximum=12)
+AMAZON_DETAIL_RETRY_ROUNDS = _env_int("AMAZON_DETAIL_RETRY_ROUNDS", 1, minimum=0, maximum=5)
 AMAZON_DETAIL_RETRY_DELAY_SECONDS = _env_float("AMAZON_DETAIL_RETRY_DELAY_SECONDS", 1.5, maximum=15.0)
 
 
@@ -568,15 +569,44 @@ def _detail_url_candidates(url: str) -> list[str]:
 
 def _fetch_detail_html(url: str) -> tuple[str, str]:
     last_err: Exception | None = None
-    for candidate in _detail_url_candidates(url):
+    candidates = _detail_url_candidates(url)
+    for index, candidate in enumerate(candidates):
         try:
-            return _fetch(candidate), candidate
+            html = _fetch(candidate)
+            if index < len(candidates) - 1 and _looks_like_thin_detail_html(html):
+                logger.info("Amazon detail route returned thin shell page for %s; trying alternate route", candidate)
+                continue
+            return html, candidate
         except (requests.RequestException, AmazonScrapeError) as exc:
             last_err = exc
             logger.info("Amazon detail route failed for %s: %s", candidate, exc)
     if last_err:
         raise last_err
     raise ValueError("Amazon detail URL is empty.")
+
+
+def _looks_like_thin_detail_html(html: str) -> bool:
+    """Detect Amazon's lightweight /dp shell pages that parse as incomplete books.
+
+    These pages often return HTTP 200 with only a few KB of markup, so treating
+    them as successful detail pages causes repeated slow retries. Alternate
+    routes such as /-/dp/<ASIN> or /gp/aw/d/<ASIN> usually contain the real
+    product metadata.
+    """
+    if not html:
+        return True
+    if len(html) >= DETAIL_THIN_HTML_BYTES:
+        return False
+    lowered = html.lower()
+    useful_markers = (
+        'id="producttitle"',
+        'id="ebooksproducttitle"',
+        "data-rpi-attribute-name",
+        "detailbullets_feature_div",
+        "productdetails_detailbullets_sections1",
+        "bookdescription_feature_div",
+    )
+    return not any(marker in lowered for marker in useful_markers)
 
 
 def _put_value(values: dict[str, str], label: str, value: str) -> None:
@@ -881,7 +911,6 @@ def _detail_missing_retryable_core(detail: AmazonDetail) -> bool:
             "missing_author",
             "missing_publisher",
             "missing_publication_date",
-            "missing_best_sellers_rank",
             "missing_print_length",
         }
     )
