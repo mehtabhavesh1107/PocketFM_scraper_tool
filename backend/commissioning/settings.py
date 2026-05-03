@@ -20,7 +20,23 @@ DEFAULT_GENERATED_DIR = VERCEL_TMP_DIR / "generated" if IS_VERCEL else BACKEND_D
 DATA_DIR = _path_from_env("COMMISSIONING_DATA_DIR", DEFAULT_DATA_DIR)
 GENERATED_DIR = _path_from_env("COMMISSIONING_GENERATED_DIR", DEFAULT_GENERATED_DIR)
 DATABASE_PATH = DATA_DIR / "commissioning.db"
-DATABASE_URL = os.getenv("COMMISSIONING_DATABASE_URL", f"sqlite:///{DATABASE_PATH.as_posix()}")
+
+
+def _database_url() -> str:
+    url = (
+        os.getenv("COMMISSIONING_DATABASE_URL")
+        or os.getenv("DATABASE_URL")
+        or os.getenv("POSTGRES_URL")
+        or os.getenv("POSTGRES_PRISMA_URL")
+        or os.getenv("POSTGRES_URL_NON_POOLING")
+        or f"sqlite:///{DATABASE_PATH.as_posix()}"
+    )
+    if url.startswith("postgres://"):
+        return url.replace("postgres://", "postgresql://", 1)
+    return url
+
+
+DATABASE_URL = _database_url()
 DEFAULT_SHEET_URL = os.getenv(
     "COMMISSIONING_GOOGLE_SHEET_URL",
     "https://docs.google.com/spreadsheets/d/1pk-uBaZvd133lqa6ofTbVfmz9jSty4BB8yg0m1ONP68/edit?gid=941904943#gid=941904943",
