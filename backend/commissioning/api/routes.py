@@ -275,6 +275,27 @@ def get_job(job_id: str, workspace_id: str = Depends(get_workspace_id), db: Sess
     return _get_job_or_404(db, job_id, workspace_id)
 
 
+@router.post("/jobs/{job_id}/cancel", response_model=JobRead)
+def cancel_job(job_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    job = _get_job_or_404(db, job_id, workspace_id)
+    if job.status in {"queued", "running"}:
+        job.status = "failed"
+        job.error = "Job cancelled by user."
+        job.message = "Job cancelled."
+        db.add(
+            JobEvent(
+                job_id=job.id,
+                level="warning",
+                message=job.message,
+                payload_json={"cancelled": True},
+                progress_percent=job.progress_percent,
+            )
+        )
+        db.commit()
+        db.refresh(job)
+    return job
+
+
 @router.get("/jobs/{job_id}/events")
 async def stream_job_events(job_id: str, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     _get_job_or_404(db, job_id, workspace_id)

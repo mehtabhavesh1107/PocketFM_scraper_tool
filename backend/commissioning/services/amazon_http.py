@@ -36,7 +36,25 @@ DEFAULT_HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
 }
 
-REQUEST_TIMEOUT = 25
+
+def _read_int_env(name: str, default: int, *, minimum: int = 0, maximum: int = 60) -> int:
+    try:
+        value = int(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+def _read_float_env(name: str, default: float, *, minimum: float = 1.0, maximum: float = 120.0) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+REQUEST_TIMEOUT = _read_float_env("AMAZON_REQUEST_TIMEOUT_SECONDS", 25, minimum=3, maximum=60)
+REQUEST_RETRIES = _read_int_env("AMAZON_REQUEST_RETRIES", 2, minimum=0, maximum=3)
 PAGE_DELAY_SECONDS = 0.6
 MAX_PAGES_PER_SOURCE = 100  # safety ceiling — Amazon search caps at ~7 pages anyway
 DEFAULT_RESULT_CEILING = 5000
@@ -152,9 +170,11 @@ def _session() -> requests.Session:
     return sess
 
 
-def _fetch(url: str, *, retries: int = 2) -> str:
+def _fetch(url: str, *, retries: int | None = None) -> str:
     sess = _session()
     last_err: Exception | None = None
+    if retries is None:
+        retries = REQUEST_RETRIES
     for attempt in range(retries + 1):
         try:
             response = sess.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)

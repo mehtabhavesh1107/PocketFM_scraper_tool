@@ -15,15 +15,19 @@ services:
       - key: COMMISSIONING_ALLOWED_ORIGINS
         value: "*"
       - key: COMMISSIONING_JOB_WORKERS
-        value: "1"
+        value: "2"
       - key: AMAZON_DETAIL_WORKERS
-        value: "1"
+        value: "4"
+      - key: AMAZON_REQUEST_TIMEOUT_SECONDS
+        value: "12"
+      - key: AMAZON_REQUEST_RETRIES
+        value: "0"
       - key: AMAZON_DETAIL_RETRY_ROUNDS
         value: "0"
       - key: COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK
         value: "1"
       - key: GOODREADS_LOOKUP_WORKERS
-        value: "1"
+        value: "2"
       - key: GOODREADS_REQUEST_DELAY_SECONDS
         value: "1.5"
       - key: PYTHONUNBUFFERED
