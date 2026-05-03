@@ -1,14 +1,8 @@
 from __future__ import annotations
 
 import re
-import sys
 
-from ..settings import WORKSPACE_ROOT
-
-if str(WORKSPACE_ROOT) not in sys.path:
-    sys.path.insert(0, str(WORKSPACE_ROOT))
-
-from goodreads_scraper import GoodreadsScraper  # type: ignore
+from .goodreads_scraper import GoodreadsScraper
 
 
 def create_scraper() -> GoodreadsScraper:
