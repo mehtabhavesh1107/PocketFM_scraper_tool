@@ -12,6 +12,7 @@ don't break us silently.
 from __future__ import annotations
 
 import logging
+import html as html_lib
 import os
 import re
 import threading
@@ -360,17 +361,90 @@ def _parse_bestseller_html(html: str, *, base_url: str, page_offset: int = 0) ->
 # ---------- search-results parser ------------------------------------------------
 
 
+def _asin_from_card(card: Tag) -> str:
+    asin = (card.get("data-asin") or "").strip().upper()
+    if _ASIN_RE.fullmatch(asin):
+        return asin
+
+    csa_id = (card.get("data-csa-c-item-id") or "").strip()
+    match = re.search(r"amzn1\.asin\.([A-Z0-9]{10})", csa_id, flags=re.IGNORECASE)
+    if match:
+        return match.group(1).upper()
+
+    for anchor in card.select('a[href*="/dp/"], a[href*="/gp/product/"]'):
+        href = anchor.get("href", "")
+        match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", href, flags=re.IGNORECASE)
+        if match:
+            return match.group(1).upper()
+    return ""
+
+
+def _asin_from_href(href: str) -> str:
+    match = re.search(r"/(?:dp|gp/product)/([A-Z0-9]{10})", href or "", flags=re.IGNORECASE)
+    return match.group(1).upper() if match else ""
+
+
+def _product_link_for_card(card: Tag, asin: str) -> Tag | None:
+    anchors = list(card.select('a[href*="/dp/"], a[href*="/gp/product/"]'))
+    if not anchors:
+        return None
+
+    title_anchors = [anchor for anchor in anchors if anchor.select_one("h2")]
+    for anchor in title_anchors:
+        if _asin_from_href(anchor.get("href", "")) == asin:
+            return anchor
+    for anchor in anchors:
+        if _asin_from_href(anchor.get("href", "")) == asin:
+            return anchor
+    return title_anchors[0] if title_anchors else anchors[0]
+
+
+def _decoded_raw_html_soup(soup: BeautifulSoup) -> BeautifulSoup | None:
+    payloads = [
+        html_lib.unescape(raw.get("data-payload") or "")
+        for raw in soup.select("raw-html[data-payload]")
+        if raw.get("data-payload")
+    ]
+    if not payloads:
+        return None
+    return BeautifulSoup("\n".join(payloads), "html.parser")
+
+
+def _search_cards_from_soup(soup: BeautifulSoup) -> list[Tag]:
+    cards: list[Tag] = []
+    seen: set[str] = set()
+    selectors = [
+        '[data-component-type="s-search-result"]',
+        '[data-csa-c-item-id^="amzn1.asin."]',
+        '[data-cy="asin-faceout-container"]',
+    ]
+    for selector in selectors:
+        for card in soup.select(selector):
+            asin = _asin_from_card(card)
+            if not asin or asin in seen:
+                continue
+            seen.add(asin)
+            cards.append(card)
+    return cards
+
+
 def _parse_search_card(card: Tag, *, base_url: str) -> AmazonItem | None:
-    asin = (card.get("data-asin") or "").strip()
+    asin = _asin_from_card(card)
     if not asin:
         return None
 
     title_el = card.select_one("h2 span, h2 a span, h2")
     title = _clean(title_el.get_text(" ", strip=True)) if title_el else ""
+    if not title and title_el:
+        title = _clean(title_el.get("aria-label", ""))
+    if not title:
+        img = card.select_one("img[alt]")
+        if img:
+            title = _clean(img.get("alt", ""))
     if not title:
         return None
 
-    link_el = card.select_one('h2 a[href*="/dp/"], a.a-link-normal[href*="/dp/"], a[href*="/dp/"]')
+    link_el = _product_link_for_card(card, asin)
     href = link_el.get("href") if link_el else ""
     if href:
         href = href.split("?")[0]
@@ -432,7 +506,17 @@ def _parse_search_card(card: Tag, *, base_url: str) -> AmazonItem | None:
 
 def _parse_search_html(html: str, *, base_url: str) -> tuple[list[AmazonItem], str | None]:
     soup = BeautifulSoup(html, "html.parser")
-    cards = soup.select('[data-component-type="s-search-result"]')
+    cards = _search_cards_from_soup(soup)
+
+    raw_soup = _decoded_raw_html_soup(soup)
+    if raw_soup is not None:
+        seen_card_asins = {_asin_from_card(card) for card in cards}
+        for card in _search_cards_from_soup(raw_soup):
+            asin = _asin_from_card(card)
+            if asin and asin not in seen_card_asins:
+                seen_card_asins.add(asin)
+                cards.append(card)
+
     items: list[AmazonItem] = []
     seen_asin: set[str] = set()
     for card in cards:
@@ -444,11 +528,22 @@ def _parse_search_html(html: str, *, base_url: str) -> tuple[list[AmazonItem], s
 
     next_link = None
     next_anchor = soup.select_one('a.s-pagination-next:not(.s-pagination-disabled)')
+    if next_anchor is None and raw_soup is not None:
+        next_anchor = raw_soup.select_one('a.s-pagination-next:not(.s-pagination-disabled)')
     if next_anchor:
         href = next_anchor.get("href", "")
         if href:
             next_link = urljoin(base_url, href)
     return items, next_link
+
+
+def _fallback_search_page_url(current_url: str, next_page_number: int) -> str:
+    parsed = urlparse(current_url)
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    params["page"] = [str(next_page_number)]
+    params["ref"] = [f"sr_pg_{next_page_number - 1}"]
+    query = urlencode(params, doseq=True)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, query, parsed.fragment))
 
 
 # ---------- multi-page driver ----------------------------------------------------
@@ -506,15 +601,21 @@ def iter_amazon_listing(url: str, *, max_results: int = 0) -> Iterator[AmazonIte
             if not items:
                 return
 
+        page_new_count = 0
         for item in items:
             if item.asin in seen:
                 continue
             seen.add(item.asin)
+            page_new_count += 1
             yielded += 1
             yield item
             if yielded >= target:
                 return
 
+        if items and page_new_count == 0:
+            return
+        if is_search and items and not next_link:
+            next_link = _fallback_search_page_url(current, page_index + 2)
         if not next_link or next_link == current:
             return
         current = next_link

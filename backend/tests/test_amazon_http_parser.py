@@ -16,6 +16,7 @@ from commissioning.services.amazon_http import (  # noqa: E402
     AmazonItem,
     AmazonScrapeError,
     clean_amazon_value,
+    discover_amazon_items,
     discover_amazon_records,
     fetch_amazon_detail,
     parse_key_values,
@@ -99,7 +100,59 @@ KINDLE_HTML = """
 """
 
 
+RAW_SEARCH_PAGE = """
+<html>
+  <body>
+    <raw-html data-payload="&lt;span data-csa-c-item-id=&quot;amzn1.asin.B0RAW00001&quot;&gt;
+      &lt;div data-cy=&quot;asin-faceout-container&quot;&gt;
+        &lt;a href=&quot;/Raw-Book-ebook/dp/B0RAW00001/ref=lp_1_1&quot;&gt;
+          &lt;h2 aria-label=&quot;Raw Payload Book&quot;&gt;&lt;span&gt;Raw Payload Book&lt;/span&gt;&lt;/h2&gt;
+        &lt;/a&gt;
+        &lt;div class=&quot;a-row a-size-base a-color-secondary&quot;&gt;by Jane Raw | Jan 1, 2026&lt;/div&gt;
+      &lt;/div&gt;
+    &lt;/span&gt;" executable="false"></raw-html>
+  </body>
+</html>
+"""
+
+
+NORMAL_SEARCH_PAGE = """
+<html>
+  <body>
+    <div data-component-type="s-search-result" data-asin="B0NEXT0001">
+      <a class="a-link-normal" href="/Wrong-Format/dp/B0IMAGE001/ref=image"><img alt="Wrong image link" /></a>
+      <a class="a-link-normal" href="/Next-Book-ebook/dp/B0NEXT0001/ref=sr_1_2">
+        <h2><span>Next Page Book</span></h2>
+      </a>
+      <div data-cy="title-recipe">
+        <div class="a-row a-size-base a-color-secondary">by Jane Next | Feb 1, 2026</div>
+      </div>
+    </div>
+  </body>
+</html>
+"""
+
+
 class AmazonHttpParserTests(unittest.TestCase):
+    def test_search_parser_reads_raw_html_cards_and_constructs_page_two(self):
+        seen_urls = []
+
+        def fake_fetch(url: str, *, retries: int = 2) -> str:
+            seen_urls.append(url)
+            if "page=2" in url:
+                return NORMAL_SEARCH_PAGE
+            return RAW_SEARCH_PAGE
+
+        with patch("commissioning.services.amazon_http._fetch", side_effect=fake_fetch):
+            items = discover_amazon_items("https://www.amazon.com/s?bbn=9069934011&rh=n%3A9089889011", max_results=2)
+
+        self.assertEqual([item.asin for item in items], ["B0RAW00001", "B0NEXT0001"])
+        self.assertEqual(items[0].title, "Raw Payload Book")
+        self.assertEqual(items[0].author, "Jane Raw")
+        self.assertIn("page=2", seen_urls[1])
+        self.assertIn("B0NEXT0001", items[1].url)
+        self.assertNotIn("B0IMAGE001", items[1].url)
+
     def test_rpi_and_hidden_unicode_values_are_cleaned(self):
         soup = BeautifulSoup(
             """
