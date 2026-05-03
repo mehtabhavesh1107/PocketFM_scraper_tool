@@ -18,7 +18,7 @@ os.environ["COMMISSIONING_GENERATED_DIR"] = str(TEST_ROOT / "generated")
 os.environ["COMMISSIONING_DATABASE_URL"] = f"sqlite:///{(TEST_ROOT / 'backend_data' / 'commissioning.db').as_posix()}"
 
 from commissioning.db import SessionLocal, engine, init_db
-from commissioning.jobs.tasks import run_scrape_job
+from commissioning.jobs.tasks import run_fast_scrape_job, run_scrape_job
 from commissioning.models import Base, Batch, Book, ExportRecord, Job, JobEvent, SourceLink
 from commissioning.services.export_service import SAMPLE_COMPATIBLE_COLUMNS
 
@@ -222,6 +222,90 @@ class PipelineSmokeTests(unittest.TestCase):
         self.assertEqual(exported[0]["Best Sellers Rank"], "1")
         self.assertEqual(exported[0]["Customer Reviews"], "4.5 out of 5 stars; 1200 ratings")
         self.assertEqual(exported[0]["Goodreads rating"], "4.31")
+        db.close()
+
+    def test_fast_scrape_skips_goodreads_but_exports_amazon_details(self):
+        db = SessionLocal()
+        batch = Batch(name="Fast Smoke", status="active")
+        db.add(batch)
+        db.flush()
+        source = SourceLink(
+            batch_id=batch.id,
+            source_type="amazon",
+            url="https://www.amazon.com/amz-books/seeMore/?asins=B0FAST0001",
+            max_results=0,
+        )
+        job = Job(batch_id=batch.id, stage="fast_scrape", status="queued")
+        db.add_all([source, job])
+        db.commit()
+        batch_id = batch.id
+        job_id = job.id
+        db.close()
+
+        records = [
+            {
+                "title": "Fast Accurate",
+                "author": "Ava North",
+                "url": "https://www.amazon.com/dp/B0FAST0001",
+                "amazon_url": "https://www.amazon.com/dp/B0FAST0001",
+                "rating": 4.6,
+                "rating_count": 120,
+                "customer_reviews": "4.6 out of 5 stars; 120 ratings",
+                "publisher": "Fast House",
+                "publication_date": "May 1, 2026",
+                "part_of_series": "Fast Accurate",
+                "language": "English",
+                "best_sellers_rank": "1",
+                "best_sellers_rank_number": "1",
+                "print_length": "300",
+                "book_number": "1",
+                "format": "Kindle",
+                "synopsis": "Full Amazon details are still fetched.",
+                "genre": "Domestic Thrillers",
+                "cleaned_series_name": "Fast Accurate",
+                "series_flag": "Y",
+                "source_asin": "B0FAST0001",
+                "detail_asin": "B0FAST0001",
+                "detail_url": "https://www.amazon.com/dp/B0FAST0001",
+                "source_format": "Kindle",
+                "detail_format": "Kindle",
+                "contributors": [{"name": "Ava North", "role": "Author"}],
+                "amazon_quality_flags": [],
+                "source_payload": {
+                    "asin": "B0FAST0001",
+                    "source_asin": "B0FAST0001",
+                    "detail_asin": "B0FAST0001",
+                    "detail_url": "https://www.amazon.com/dp/B0FAST0001",
+                    "detail_fetched": True,
+                },
+            }
+        ]
+
+        def fake_discover(source_type: str, url: str, max_results: int, *, on_progress=None):
+            if on_progress:
+                on_progress(0, len(records), None)
+                on_progress(1, len(records), records[0])
+            return records
+
+        with (
+            patch("commissioning.jobs.tasks.discover_books", side_effect=fake_discover),
+            patch("commissioning.jobs.tasks.create_scraper", side_effect=AssertionError("Goodreads should not run")),
+            patch("commissioning.jobs.tasks.enrich_row", side_effect=AssertionError("Goodreads should not run")),
+        ):
+            run_fast_scrape_job(job_id, batch_id)
+
+        db = SessionLocal()
+        completed = db.get(Job, job_id)
+        books = db.query(Book).filter(Book.batch_id == batch_id).order_by(Book.id.asc()).all()
+        export = db.query(ExportRecord).filter(ExportRecord.batch_id == batch_id).order_by(ExportRecord.id.desc()).first()
+        self.assertEqual(completed.status, "completed")
+        self.assertIn("Discovered 1 books", completed.message)
+        self.assertIn("Goodreads mapping skipped for fast mode", completed.message)
+        self.assertEqual(len(books), 1)
+        self.assertEqual(books[0].publisher, "Fast House")
+        self.assertEqual(books[0].goodreads_rating, "")
+        self.assertIsNotNone(export)
+        self.assertEqual(export.row_count, 1)
         db.close()
 
 

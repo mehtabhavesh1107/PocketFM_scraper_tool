@@ -80,6 +80,25 @@ class CommissioningApiTests(unittest.TestCase):
 
         self.assertEqual(records, [{"title": "Short Domain"}])
 
+    def test_fast_scrape_endpoint_queues_fast_stage(self):
+        async def run():
+            response = await self._request(
+                "POST",
+                "/api/batches",
+                json={"name": "Fast Queue", "genre": "Thriller", "subgenre": "Domestic"},
+            )
+            self.assertEqual(response.status_code, 200)
+            batch = response.json()
+            with patch("commissioning.api.routes.job_manager.submit") as submit:
+                queued = await self._request("POST", f"/api/batches/{batch['id']}/jobs/scrape-fast")
+            self.assertEqual(queued.status_code, 200)
+            self.assertEqual(queued.json()["job"]["stage"], "fast_scrape")
+            submit.assert_called_once()
+
+        import asyncio
+
+        asyncio.run(run())
+
     def test_missing_batch_is_auto_created_for_cloud_storage_recovery(self):
         async def run():
             sources = await self._request("GET", "/api/batches/987/sources")

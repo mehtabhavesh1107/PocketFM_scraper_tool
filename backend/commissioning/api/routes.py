@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..db import get_db
 from ..jobs.manager import job_manager
-from ..jobs.tasks import run_contact_job, run_goodreads_job, run_scrape_job
+from ..jobs.tasks import run_contact_job, run_fast_scrape_job, run_goodreads_job, run_scrape_job
 from ..models import Batch, Book, Job, JobEvent, OutreachMessage, SourceLink, StoredSchema
 from ..schemas import (
     BatchCreate,
@@ -256,6 +256,12 @@ def _queue_job(db: Session, *, batch_id: int, stage: str, task) -> Job:
 def queue_scrape_job(batch_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     batch = _get_batch_or_404(db, batch_id, workspace_id)
     return {"job": _queue_job(db, batch_id=batch.id, stage="scrape", task=run_scrape_job)}
+
+
+@router.post("/batches/{batch_id}/jobs/scrape-fast", response_model=JobCreateResponse)
+def queue_fast_scrape_job(batch_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
+    return {"job": _queue_job(db, batch_id=batch.id, stage="fast_scrape", task=run_fast_scrape_job)}
 
 
 @router.post("/batches/{batch_id}/jobs/enrich-goodreads", response_model=JobCreateResponse)

@@ -466,14 +466,15 @@ def _coverage_message(summary: dict) -> str:
     )
 
 
-def run_scrape_job(job_id: str, batch_id: int) -> None:
+def _run_scrape_job(job_id: str, batch_id: int, *, auto_goodreads: bool) -> None:
     db = SessionLocal()
     job = db.get(Job, job_id)
     batch = db.get(Batch, batch_id)
     logger = JobLogger(db, job)
     try:
         source_links = db.query(SourceLink).filter(SourceLink.batch_id == batch_id).order_by(SourceLink.id.asc()).all()
-        logger.start(f"Starting scrape job for batch '{batch.name}'.")
+        mode_label = "scrape" if auto_goodreads else "fast scrape"
+        logger.start(f"Starting {mode_label} job for batch '{batch.name}'.")
         logger.event("info", f"Processing {len(source_links)} source links.", progress_total=max(len(source_links), 1))
         discovered_total = 0
         empty_sources: list[str] = []
@@ -546,7 +547,17 @@ def run_scrape_job(job_id: str, batch_id: int) -> None:
                         failure_bucket="amazon_detail_coverage_low",
                     )
                     return
-            mapped = _enrich_goodreads_for_batch(db, logger, batch_id, auto=True)
+            mapped = 0
+            if auto_goodreads:
+                mapped = _enrich_goodreads_for_batch(db, logger, batch_id, auto=True)
+            else:
+                logger.event(
+                    "info",
+                    "Fast scrape completed Amazon detail fetching; Goodreads mapping was skipped for speed.",
+                    progress_current=1,
+                    progress_total=1,
+                    payload={"auto_goodreads": False},
+                )
             books = db.query(Book).filter(Book.batch_id == batch_id).order_by(Book.id.asc()).all()
             coverage = _scrape_coverage(books)
             coverage_message = _coverage_message(coverage)
@@ -578,7 +589,10 @@ def run_scrape_job(job_id: str, batch_id: int) -> None:
                 },
             )
             export = generate_export(db, batch, "csv", profile="sample_compatible")
-            completion_bits.append(f"Goodreads matched for {mapped} books.")
+            if auto_goodreads:
+                completion_bits.append(f"Goodreads matched for {mapped} books.")
+            else:
+                completion_bits.append("Goodreads mapping skipped for fast mode; run Enrich Goodreads to fill Goodreads columns.")
             completion_bits.append(coverage_message)
             completion_bits.append(f"Comprehensive CSV generated: {export.file_path}.")
         logger.finish(" ".join(completion_bits))
@@ -586,6 +600,14 @@ def run_scrape_job(job_id: str, batch_id: int) -> None:
         logger.fail(f"Scrape job failed: {exc}", failure_bucket="scrape_job_failed")
     finally:
         db.close()
+
+
+def run_scrape_job(job_id: str, batch_id: int) -> None:
+    _run_scrape_job(job_id, batch_id, auto_goodreads=True)
+
+
+def run_fast_scrape_job(job_id: str, batch_id: int) -> None:
+    _run_scrape_job(job_id, batch_id, auto_goodreads=False)
 
 
 def run_goodreads_job(job_id: str, batch_id: int) -> None:

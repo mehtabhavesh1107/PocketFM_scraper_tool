@@ -10,6 +10,7 @@ const WORKSPACE_KEY = 'pocketfm_workspace_id';
 
 type PageId = 'dashboard' | 'scrapping' | 'mapping' | 'benchmark' | 'outreach' | 'export';
 type SourceType = 'amazon' | 'goodreads' | 'shared';
+type JobKind = 'scrape' | 'scrape-fast' | 'enrich-goodreads' | 'enrich-contacts';
 
 interface Batch {
   id: number;
@@ -139,6 +140,9 @@ function isRunningJob(job?: Job | null): boolean {
 }
 
 function jobStageLabel(job: Job): string {
+  if (job.stage === 'fast_scrape') return 'fast scrape';
+  if (job.stage === 'enrich_goodreads') return 'enrich Goodreads';
+  if (job.stage === 'enrich_contacts') return 'find contacts';
   return job.stage.replace(/_/g, ' ');
 }
 
@@ -595,7 +599,7 @@ function App() {
     });
   }
 
-  async function runJob(kind: 'scrape' | 'enrich-goodreads' | 'enrich-contacts') {
+  async function runJob(kind: JobKind) {
     if (!batch) return;
     if (activeJob && isRunningJob(activeJob)) {
       setNotice(`${jobStageLabel(activeJob)} is already running.`);
@@ -604,7 +608,7 @@ function App() {
     setError('');
     setNotice('');
     try {
-      if (kind === 'scrape') await saveSources();
+      if (kind === 'scrape' || kind === 'scrape-fast') await saveSources();
       const data = await api<{ job: Job }>(`/batches/${batch.id}/jobs/${kind}`, { method: 'POST' });
       setActiveJob(data.job);
       setNotice(`${data.job.stage.replace(/_/g, ' ')} queued.`);
@@ -1203,7 +1207,7 @@ function ScrapingPage({
   sourceInputs: Record<'amazon' | 'goodreads', SourceInput[]>;
   updateSource: (source: 'amazon' | 'goodreads', index: number, patch: Partial<SourceInput>) => void;
   toggleSchemaField: (source: SourceType, field: FieldDefinition) => void;
-  runJob: (kind: 'scrape' | 'enrich-goodreads' | 'enrich-contacts') => void;
+  runJob: (kind: JobKind) => void;
   jobRunning: boolean;
   nav: (page: PageId) => void;
 }) {
@@ -1242,9 +1246,10 @@ function ScrapingPage({
       </div>
 
       <div className="action-row">
-        <div className="action-note">Run scraper maps every saved source and auto-generates a comprehensive CSV.</div>
+        <div className="action-note">Fast scrape keeps full Amazon detail accuracy and skips Goodreads until you run enrichment.</div>
         <div className="spacer" />
-        <button className="btn" onClick={() => runJob('scrape')} disabled={jobRunning}>↻ {jobRunning ? 'Scraper running' : 'Run scraper now'}</button>
+        <button className="btn" onClick={() => runJob('scrape-fast')} disabled={jobRunning}>↯ {jobRunning ? 'Job running' : 'Fast scrape'}</button>
+        <button className="btn" onClick={() => runJob('scrape')} disabled={jobRunning}>↻ {jobRunning ? 'Scraper running' : 'Full scrape'}</button>
         <button className="btn" onClick={() => runJob('enrich-goodreads')} disabled={jobRunning}>◎ Enrich Goodreads</button>
         <button className="btn" onClick={() => runJob('enrich-contacts')} disabled={jobRunning}>@ Find contacts</button>
         <button className="btn btn-primary" onClick={() => nav('mapping')}>Next: Data Mapping →</button>
@@ -1373,7 +1378,7 @@ function MappingPage({
   setSortKey: (value: 'title' | 'author' | 'rating' | 'rating_count' | 'word_count') => void;
   patchBook: (bookId: number, patch: Partial<Book>) => void;
   nav: (page: PageId) => void;
-  runJob: (kind: 'scrape' | 'enrich-goodreads' | 'enrich-contacts') => void;
+  runJob: (kind: JobKind) => void;
   jobRunning: boolean;
 }) {
   const genreOptions = Array.from(
