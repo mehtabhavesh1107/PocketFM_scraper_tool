@@ -20,7 +20,7 @@ import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Iterable, Iterator
-from urllib.parse import parse_qs, urlencode, urljoin, urlparse, urlunparse
+from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -253,7 +253,8 @@ def _normalized_query_key(key: str) -> str:
 
 
 def _asins_from_query(url: str) -> list[str]:
-    parsed = urlparse(_normalize_url_text(url))
+    normalized_url = _normalize_url_text(url)
+    parsed = urlparse(normalized_url)
     params = parse_qs(parsed.query, keep_blank_values=True)
     raw_values: list[str] = []
     for key, values in params.items():
@@ -268,6 +269,22 @@ def _asins_from_query(url: str) -> list[str]:
                 continue
             seen.add(asin)
             asins.append(asin)
+    if asins:
+        return asins
+
+    if "/amz-books/seemore/" not in (parsed.path or "").lower():
+        return asins
+
+    # Some browser/app copy paths mangle seeMore query strings enough that
+    # `asins=` is no longer parsed as a normal parameter. Fall back to scanning
+    # the decoded seeMore URL text for standalone 10-character ASIN/ISBN tokens.
+    decoded_url = unquote(normalized_url)
+    for token in re.split(r"[^A-Za-z0-9]+", decoded_url):
+        asin = token.strip().upper()
+        if not _ASIN_RE.fullmatch(asin) or asin in seen:
+            continue
+        seen.add(asin)
+        asins.append(asin)
     return asins
 
 

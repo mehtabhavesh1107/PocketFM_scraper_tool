@@ -330,6 +330,14 @@ class AmazonHttpParserTests(unittest.TestCase):
         self.assertEqual([item.asin for item in items], ["B0FKTTYMVG", "B0FJNF8PP6"])
         self.assertEqual(items[0].raw["source"], "query_asins")
 
+    def test_malformed_see_more_url_falls_back_to_scanning_asin_tokens(self):
+        items = discover_amazon_items(
+            "https://www.amazon.com/amz-books/seeMore/?broken=B0FKTTYMVG%2CB0FJNF8PP6%2C0316569801&category=Mystery"
+        )
+
+        self.assertEqual([item.asin for item in items], ["B0FKTTYMVG", "B0FJNF8PP6", "0316569801"])
+        self.assertEqual(items[2].url, "https://www.amazon.com/dp/0316569801")
+
 
 if __name__ == "__main__":
     unittest.main()
