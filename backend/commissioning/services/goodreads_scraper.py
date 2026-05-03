@@ -29,6 +29,7 @@ from .goodreads_config import (
 
 REQUEST_ATTEMPTS = int(os.getenv("GOODREADS_REQUEST_ATTEMPTS", "3"))
 MIN_BOOK_MATCH_SCORE = 0.50
+HTML_CACHE_MAX_ENTRIES = max(0, int(os.getenv("GOODREADS_HTML_CACHE_MAX_ENTRIES", "0")))
 
 GOODREADS_ROOT = "https://www.goodreads.com"
 HEADERS = {
@@ -42,6 +43,14 @@ HEADERS = {
 
 _GLOBAL_HTML_CACHE: dict[str, str] = {}
 _GLOBAL_CACHE_LOCK = threading.RLock()
+
+
+def _remember_html(cache: dict[str, str], key: str, html: str) -> None:
+    if HTML_CACHE_MAX_ENTRIES <= 0:
+        return
+    cache[key] = html
+    while len(cache) > HTML_CACHE_MAX_ENTRIES:
+        cache.pop(next(iter(cache)), None)
 
 
 def is_missing(value) -> bool:
@@ -173,13 +182,14 @@ class GoodreadsScraper:
 
     def _fetch_html(self, url: str) -> str:
         normalized = normalize_url(url, keep_query=True)
-        if normalized in self._html_cache:
+        if HTML_CACHE_MAX_ENTRIES > 0 and normalized in self._html_cache:
             return self._html_cache[normalized]
-        with _GLOBAL_CACHE_LOCK:
-            cached = _GLOBAL_HTML_CACHE.get(normalized)
-        if cached is not None:
-            self._html_cache[normalized] = cached
-            return cached
+        if HTML_CACHE_MAX_ENTRIES > 0:
+            with _GLOBAL_CACHE_LOCK:
+                cached = _GLOBAL_HTML_CACHE.get(normalized)
+            if cached is not None:
+                _remember_html(self._html_cache, normalized, cached)
+                return cached
 
         last_error = None
         for attempt in range(REQUEST_ATTEMPTS):
@@ -187,11 +197,13 @@ class GoodreadsScraper:
                 response = self.session.get(normalized, timeout=REQUEST_TIMEOUT)
                 response.raise_for_status()
                 response.encoding = response.encoding or "utf-8"
-                self._html_cache[normalized] = response.text
-                with _GLOBAL_CACHE_LOCK:
-                    _GLOBAL_HTML_CACHE[normalized] = response.text
+                html = response.text
+                _remember_html(self._html_cache, normalized, html)
+                if HTML_CACHE_MAX_ENTRIES > 0:
+                    with _GLOBAL_CACHE_LOCK:
+                        _remember_html(_GLOBAL_HTML_CACHE, normalized, html)
                 time.sleep(REQUEST_DELAY_SECONDS)
-                return response.text
+                return html
             except requests.RequestException as exc:
                 last_error = exc
                 time.sleep(REQUEST_DELAY_SECONDS * (attempt + 1))

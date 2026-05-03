@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 import re
 import threading
+import gc
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -26,6 +27,7 @@ def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int = 16) ->
 
 
 GOODREADS_LOOKUP_WORKERS = _env_int("GOODREADS_LOOKUP_WORKERS", 4, maximum=12)
+GOODREADS_GC_EVERY = _env_int("GOODREADS_GC_EVERY", 5, minimum=1, maximum=50)
 ASIN_TEXT_RE = re.compile(r"^[A-Z0-9]{10}$", re.IGNORECASE)
 
 
@@ -352,6 +354,8 @@ def _enrich_goodreads_for_batch(db: Session, logger: JobLogger, batch_id: int, *
                     progress_current=completed,
                     progress_total=len(items),
                 )
+                if completed % GOODREADS_GC_EVERY == 0:
+                    gc.collect()
             except Exception as exc:
                 logger.event(
                     "warning",
@@ -383,6 +387,8 @@ def _enrich_goodreads_for_batch(db: Session, logger: JobLogger, batch_id: int, *
                     progress_current=completed,
                     progress_total=len(items),
                 )
+                if completed % GOODREADS_GC_EVERY == 0:
+                    gc.collect()
             except Exception as exc:
                 logger.event(
                     "warning",
@@ -496,18 +502,21 @@ def run_scrape_job(job_id: str, batch_id: int) -> None:
                 else:
                     source.status = "empty"
                     empty_sources.append(source.url)
+                record_count = len(records)
                 for record in records:
                     _upsert_book(db, batch_id, record, source.source_type, source.url)
-                discovered_total += len(records)
+                discovered_total += record_count
                 logger.event(
-                    "info" if records else "warning",
-                    f"Discovered {len(records)} books from {source.source_type} source {source.id}." if records
+                    "info" if record_count else "warning",
+                    f"Discovered {record_count} books from {source.source_type} source {source.id}." if record_count
                     else f"No books found at {source.url} (selectors may not match this URL format).",
                     progress_current=idx,
                     progress_total=len(source_links),
-                    payload={"source_id": source.id, "discovered": len(records), "url": source.url},
-                    failure_bucket="" if records else "source_returned_empty",
+                    payload={"source_id": source.id, "discovered": record_count, "url": source.url},
+                    failure_bucket="" if record_count else "source_returned_empty",
                 )
+                del records
+                gc.collect()
             except Exception as exc:
                 source.status = "failed"
                 failed_sources.append(f"{source.url}: {exc}")

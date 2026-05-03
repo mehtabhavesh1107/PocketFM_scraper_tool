@@ -28,8 +28,20 @@ services:
         value: "1"
       - key: GOODREADS_LOOKUP_WORKERS
         value: "2"
+      - key: GOODREADS_REQUEST_ATTEMPTS
+        value: "1"
+      - key: GOODREADS_REQUEST_TIMEOUT
+        value: "12"
       - key: GOODREADS_REQUEST_DELAY_SECONDS
-        value: "1.5"
+        value: "0.35"
+      - key: GOODREADS_MAX_CANDIDATE_BOOKS
+        value: "3"
+      - key: GOODREADS_MAX_SEARCH_RESULTS
+        value: "5"
+      - key: GOODREADS_HTML_CACHE_MAX_ENTRIES
+        value: "0"
+      - key: GOODREADS_GC_EVERY
+        value: "3"
       - key: PYTHONUNBUFFERED
         value: "1"
       - key: PLAYWRIGHT_BROWSERS_PATH
