@@ -460,7 +460,7 @@ function App() {
     setSelectedEvalId(null);
     setSelectedOutreachId(null);
     if (nextRuns) setRuns(nextRuns);
-    await Promise.all([loadBooks(batchId, true), loadSources(batchId), loadReferenceSchema(batchId), loadDataQuality(batchId)]);
+    await Promise.all([loadBooks(nextBatch.id, true), loadSources(nextBatch.id), loadReferenceSchema(nextBatch.id), loadDataQuality(nextBatch.id)]);
   }
 
   async function selectRun(batchId: number) {

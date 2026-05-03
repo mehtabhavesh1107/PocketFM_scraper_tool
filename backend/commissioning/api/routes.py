@@ -50,7 +50,7 @@ from ..services.batch_service import DEFAULT_BATCH_NAME, DEFAULT_WORKSPACE_ID, e
 from ..services.reference_schema import reference_column_fields
 from ..services.schema_service import create_schema
 from ..services.sheet_sync_service import pull_from_sheet, push_to_sheet
-from ..settings import DEFAULT_SHEET_URL, DEFAULT_WORKSHEET_NAME
+from ..settings import DATABASE_URL, DEFAULT_SHEET_URL, DEFAULT_WORKSHEET_NAME, IS_VERCEL
 
 router = APIRouter(prefix="/api", tags=["commissioning"])
 
@@ -72,10 +72,18 @@ def _get_batch_or_404(db: Session, batch_id: int, workspace_id: str) -> Batch:
         try:
             batch = ensure_working_batch(db, workspace_id=workspace_id, batch_id=batch_id)
         except RuntimeError as exc:
+            if _allow_volatile_workspace_recovery():
+                return ensure_working_batch(db, workspace_id=workspace_id)
             raise HTTPException(status_code=404, detail="Batch not found") from exc
     if batch.workspace_id != workspace_id:
+        if _allow_volatile_workspace_recovery():
+            return ensure_working_batch(db, workspace_id=workspace_id)
         raise HTTPException(status_code=404, detail="Batch not found")
     return batch
+
+
+def _allow_volatile_workspace_recovery() -> bool:
+    return IS_VERCEL and DATABASE_URL.startswith("sqlite")
 
 
 def _get_book_or_404(db: Session, book_id: int, workspace_id: str) -> Book:
@@ -140,10 +148,11 @@ async def upload_schema(
     workspace_id: str = Depends(get_workspace_id),
     db: Session = Depends(get_db),
 ):
+    actual_batch_id = batch_id
     if batch_id is not None:
-        _get_batch_or_404(db, batch_id, workspace_id)
+        actual_batch_id = _get_batch_or_404(db, batch_id, workspace_id).id
     content = (await file.read()).decode("utf-8")
-    schema = create_schema(db, source_type=source_type, file_name=file.filename or "schema.csv", content=content, batch_id=batch_id, name=name)
+    schema = create_schema(db, source_type=source_type, file_name=file.filename or "schema.csv", content=content, batch_id=actual_batch_id, name=name)
     return schema
 
 
@@ -200,17 +209,17 @@ def get_batch_summary(batch_id: int, workspace_id: str = Depends(get_workspace_i
 
 @router.get("/batches/{batch_id}/data-quality")
 def get_data_quality(batch_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
-    _get_batch_or_404(db, batch_id, workspace_id)
-    return batch_data_quality(db, batch_id)
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
+    return batch_data_quality(db, batch.id)
 
 
 @router.post("/batches/{batch_id}/sources", response_model=list[SourceLinkRead])
 def add_sources(batch_id: int, payload: list[SourceLinkCreate], workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
-    _get_batch_or_404(db, batch_id, workspace_id)
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
     items = []
     for entry in payload:
         source = SourceLink(
-            batch_id=batch_id,
+            batch_id=batch.id,
             source_type=entry.source_type.lower(),
             url=entry.url,
             max_results=entry.max_results,
@@ -227,16 +236,16 @@ def add_sources(batch_id: int, payload: list[SourceLinkCreate], workspace_id: st
 
 @router.put("/batches/{batch_id}/sources", response_model=list[SourceLinkRead])
 def replace_sources(batch_id: int, payload: list[SourceLinkCreate], workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
-    _get_batch_or_404(db, batch_id, workspace_id)
-    db.query(SourceLink).filter(SourceLink.batch_id == batch_id).delete(synchronize_session=False)
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
+    db.query(SourceLink).filter(SourceLink.batch_id == batch.id).delete(synchronize_session=False)
     db.commit()
-    return add_sources(batch_id, payload, workspace_id, db)
+    return add_sources(batch.id, payload, workspace_id, db)
 
 
 @router.get("/batches/{batch_id}/sources", response_model=list[SourceLinkRead])
 def get_sources(batch_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
-    _get_batch_or_404(db, batch_id, workspace_id)
-    return db.query(SourceLink).filter(SourceLink.batch_id == batch_id).order_by(SourceLink.id.asc()).all()
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
+    return db.query(SourceLink).filter(SourceLink.batch_id == batch.id).order_by(SourceLink.id.asc()).all()
 
 
 def _queue_job(db: Session, *, batch_id: int, stage: str, task) -> Job:
@@ -253,20 +262,20 @@ def _queue_job(db: Session, *, batch_id: int, stage: str, task) -> Job:
 
 @router.post("/batches/{batch_id}/jobs/scrape", response_model=JobCreateResponse)
 def queue_scrape_job(batch_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
-    _get_batch_or_404(db, batch_id, workspace_id)
-    return {"job": _queue_job(db, batch_id=batch_id, stage="scrape", task=run_scrape_job)}
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
+    return {"job": _queue_job(db, batch_id=batch.id, stage="scrape", task=run_scrape_job)}
 
 
 @router.post("/batches/{batch_id}/jobs/enrich-goodreads", response_model=JobCreateResponse)
 def queue_goodreads_job(batch_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
-    _get_batch_or_404(db, batch_id, workspace_id)
-    return {"job": _queue_job(db, batch_id=batch_id, stage="enrich_goodreads", task=run_goodreads_job)}
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
+    return {"job": _queue_job(db, batch_id=batch.id, stage="enrich_goodreads", task=run_goodreads_job)}
 
 
 @router.post("/batches/{batch_id}/jobs/enrich-contacts", response_model=JobCreateResponse)
 def queue_contact_job(batch_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
-    _get_batch_or_404(db, batch_id, workspace_id)
-    return {"job": _queue_job(db, batch_id=batch_id, stage="enrich_contacts", task=run_contact_job)}
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
+    return {"job": _queue_job(db, batch_id=batch.id, stage="enrich_contacts", task=run_contact_job)}
 
 
 @router.get("/jobs/{job_id}", response_model=JobRead)
@@ -315,10 +324,10 @@ def get_books(
     workspace_id: str = Depends(get_workspace_id),
     db: Session = Depends(get_db),
 ):
-    _get_batch_or_404(db, batch_id, workspace_id)
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
     total, items = list_books(
         db,
-        batch_id=batch_id,
+        batch_id=batch.id,
         page=page,
         page_size=page_size,
         search=search,
@@ -338,15 +347,15 @@ def update_book(book_id: int, payload: BookPatch, workspace_id: str = Depends(ge
 
 @router.post("/batches/{batch_id}/benchmark/apply", response_model=BenchmarkResponse)
 def benchmark_batch(batch_id: int, payload: BenchmarkRequest, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
-    _get_batch_or_404(db, batch_id, workspace_id)
-    matched_ids = apply_benchmark(db, batch_id, payload.model_dump())
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
+    matched_ids = apply_benchmark(db, batch.id, payload.model_dump())
     return {"total": len(matched_ids), "matched_ids": matched_ids}
 
 
 @router.get("/batches/{batch_id}/outreach", response_model=list[BookRead])
 def get_outreach(batch_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
-    _get_batch_or_404(db, batch_id, workspace_id)
-    items = get_outreach_items(db, batch_id)
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
+    items = get_outreach_items(db, batch.id)
     return [BookRead.model_validate(item) for item in items]
 
 
