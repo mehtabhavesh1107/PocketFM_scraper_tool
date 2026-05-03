@@ -19,6 +19,8 @@ services:
       - key: AMAZON_DETAIL_WORKERS
         value: "1"
       - key: AMAZON_DETAIL_RETRY_ROUNDS
+        value: "0"
+      - key: COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK
         value: "1"
       - key: GOODREADS_LOOKUP_WORKERS
         value: "1"

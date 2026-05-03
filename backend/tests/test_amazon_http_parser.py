@@ -306,6 +306,22 @@ class AmazonHttpParserTests(unittest.TestCase):
         self.assertEqual(records[0]["publisher"], "Knopf")
         self.assertEqual(records[0]["best_sellers_rank"], "42")
 
+    def test_plain_dp_url_is_treated_as_single_asin_source(self):
+        items = discover_amazon_items("https://www.amazon.com/Some-Book/dp/B0FKTTYMVG/ref=tmm_kin_swatch_0")
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].asin, "B0FKTTYMVG")
+        self.assertEqual(items[0].url, "https://www.amazon.com/dp/B0FKTTYMVG")
+        self.assertEqual(items[0].raw["source"], "path_asin")
+
+    def test_amzn_short_asin_url_is_treated_as_single_asin_source(self):
+        items = discover_amazon_items("https://www.amzn.com/B0FKTTYMVG")
+
+        self.assertEqual(len(items), 1)
+        self.assertEqual(items[0].asin, "B0FKTTYMVG")
+        self.assertEqual(items[0].url, "https://www.amzn.com/dp/B0FKTTYMVG")
+        self.assertEqual(items[0].raw["source"], "path_asin")
+
 
 if __name__ == "__main__":
     unittest.main()

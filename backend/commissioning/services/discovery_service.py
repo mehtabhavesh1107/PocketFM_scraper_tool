@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import sys
 from urllib.parse import urljoin, urlparse
 
@@ -55,6 +56,9 @@ def _playwright_amazon_fallback(url: str, max_results: int) -> list[dict]:
     Imported lazily so installations without Playwright or its browser binaries
     still work for the HTTP-first path.
     """
+    if os.getenv("COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK", "").strip().lower() in {"1", "true", "yes"}:
+        logger.warning("Playwright fallback disabled; skipping browser scrape for %s", url)
+        return []
     try:
         from scraper import AmazonScraper  # type: ignore
     except Exception as exc:  # pragma: no cover - optional dependency

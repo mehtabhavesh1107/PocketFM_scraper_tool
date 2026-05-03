@@ -175,6 +175,7 @@ def _fetch(url: str, *, retries: int = 2) -> str:
 _RATING_RE = re.compile(r"(\d+(?:\.\d+)?)\s*out of\s*5", re.IGNORECASE)
 _INT_RE = re.compile(r"[\d,]+")
 _ASIN_RE = re.compile(r"^[A-Z0-9]{10}$", re.IGNORECASE)
+_PATH_ASIN_RE = re.compile(r"/(?:dp|gp/product)/([A-Z0-9]{10})(?:[/?#]|$)", re.IGNORECASE)
 
 
 def _parse_rating(text: str) -> float | None:
@@ -234,6 +235,17 @@ def _asins_from_query(url: str) -> list[str]:
             seen.add(asin)
             asins.append(asin)
     return asins
+
+
+def _asin_from_path(url: str) -> str:
+    parsed = urlparse(url)
+    match = _PATH_ASIN_RE.search(parsed.path or "")
+    if match:
+        return match.group(1).upper()
+    short_path = (parsed.path or "").strip("/").split("/", 1)[0].upper()
+    if _ASIN_RE.fullmatch(short_path):
+        return short_path
+    return ""
 
 
 # ---------- bestseller / zgbs / category parser ----------------------------------
@@ -569,6 +581,16 @@ def iter_amazon_listing(url: str, *, max_results: int = 0) -> Iterator[AmazonIte
                 url=f"{base}/dp/{asin}",
                 raw={"asin": asin, "source": "query_asins", "source_url": url},
             )
+        return
+
+    path_asin = _asin_from_path(url)
+    if path_asin:
+        yield AmazonItem(
+            asin=path_asin,
+            title=path_asin,
+            url=f"{base}/dp/{path_asin}",
+            raw={"asin": path_asin, "source": "path_asin", "source_url": url},
+        )
         return
 
     seen: set[str] = set()
