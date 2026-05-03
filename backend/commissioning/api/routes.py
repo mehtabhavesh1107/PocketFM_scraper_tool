@@ -50,7 +50,7 @@ from ..services.batch_service import DEFAULT_BATCH_NAME, DEFAULT_WORKSPACE_ID, e
 from ..services.reference_schema import reference_column_fields
 from ..services.schema_service import create_schema
 from ..services.sheet_sync_service import pull_from_sheet, push_to_sheet
-from ..settings import DATABASE_URL, DEFAULT_SHEET_URL, DEFAULT_WORKSHEET_NAME, IS_VERCEL
+from ..settings import DEFAULT_SHEET_URL, DEFAULT_WORKSHEET_NAME
 
 router = APIRouter(prefix="/api", tags=["commissioning"])
 
@@ -72,18 +72,10 @@ def _get_batch_or_404(db: Session, batch_id: int, workspace_id: str) -> Batch:
         try:
             batch = ensure_working_batch(db, workspace_id=workspace_id, batch_id=batch_id)
         except RuntimeError as exc:
-            if _allow_volatile_workspace_recovery():
-                return ensure_working_batch(db, workspace_id=workspace_id)
             raise HTTPException(status_code=404, detail="Batch not found") from exc
     if batch.workspace_id != workspace_id:
-        if _allow_volatile_workspace_recovery():
-            return ensure_working_batch(db, workspace_id=workspace_id)
         raise HTTPException(status_code=404, detail="Batch not found")
     return batch
-
-
-def _allow_volatile_workspace_recovery() -> bool:
-    return IS_VERCEL and DATABASE_URL.startswith("sqlite")
 
 
 def _get_book_or_404(db: Session, book_id: int, workspace_id: str) -> Book:

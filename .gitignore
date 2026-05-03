@@ -1,36 +1,41 @@
-# Node 
+# Node
 node_modules/
+frontend/node_modules/
+backend/node_modules/
 dist/
-!frontend/dist/
-!frontend/dist/**
-dist-ssr
+frontend/dist/
+dist-ssr/
 *.local
 
-# Python 
+# Python
 venv/
+.venv/
 __pycache__/
 *.py[cod]
 *$py.class
+
+# Local data and generated artifacts
 *.xlsx
 scraped_data.xlsx
-.env
-.env.*
-!.env.example
-
-# IDE
-.vscode/
-.idea/
-.DS_Store
-
-# Debug & Scraper State
-*.log
-*.err.log
-*.png
-*_debug.html
-goodreads_*.html
 backend/scratch/
 backend/backend_data/
 backend/generated/
 keyword_state_*.json
 
-.vercel
+# Logs and debug output
+*.log
+*.err.log
+*.png
+*_debug.html
+goodreads_*.html
+
+# Environment and platform-local state
+.env
+.env.*
+!.env.example
+.vercel/
+
+# IDE
+.vscode/
+.idea/
+.DS_Store

@@ -1,0 +1,37 @@
+services:
+  - type: web
+    name: pocketfm-backend
+    runtime: docker
+    plan: free
+    region: singapore
+    dockerContext: .
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+    envVars:
+      - key: COMMISSIONING_DATABASE_URL
+        fromDatabase:
+          name: pocketfm-db
+          property: connectionString
+      - key: COMMISSIONING_ALLOWED_ORIGINS
+        value: "*"
+      - key: COMMISSIONING_JOB_WORKERS
+        value: "1"
+      - key: AMAZON_DETAIL_WORKERS
+        value: "1"
+      - key: AMAZON_DETAIL_RETRY_ROUNDS
+        value: "1"
+      - key: GOODREADS_LOOKUP_WORKERS
+        value: "1"
+      - key: GOODREADS_REQUEST_DELAY_SECONDS
+        value: "1.5"
+      - key: PYTHONUNBUFFERED
+        value: "1"
+      - key: PLAYWRIGHT_BROWSERS_PATH
+        value: /ms-playwright
+
+databases:
+  - name: pocketfm-db
+    plan: free
+    region: singapore
+    databaseName: pocketfm
+    user: pocketfm

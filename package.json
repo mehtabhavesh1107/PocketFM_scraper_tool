@@ -1,20 +1,29 @@
 {
-  "name": "pocketfm",
+  "name": "pocketfm-commissioning-tool",
   "version": "1.0.0",
-  "description": "",
-  "main": "index.js",
+  "private": true,
+  "description": "Full-stack Pocket FM commissioning scraper and curation tool.",
   "scripts": {
-    "dev": "concurrently \"npm run dev-backend\" \"npm run dev-frontend\"",
-    "dev-backend": "cd backend && py -m uvicorn app:app --reload --port 8000",
-    "dev-frontend": "cd frontend && npm run dev -- --host 127.0.0.1 --port 5173",
-    "dev-lan": "concurrently \"npm run dev-backend-lan\" \"npm run dev-frontend-lan\"",
-    "dev-backend-lan": "cd backend && py -m uvicorn app:app --reload --host 0.0.0.0 --port 8000",
-    "dev-frontend-lan": "cd frontend && npm run dev -- --host 0.0.0.0 --port 5173",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:backend": "cd backend && py -m uvicorn app:app --reload --host 127.0.0.1 --port 8000",
+    "dev:frontend": "cd frontend && npm run dev -- --host 127.0.0.1 --port 5173",
+    "dev:lan": "concurrently \"npm run dev:backend:lan\" \"npm run dev:frontend:lan\"",
+    "dev:backend:lan": "cd backend && py -m uvicorn app:app --reload --host 0.0.0.0 --port 8000",
+    "dev:frontend:lan": "cd frontend && npm run dev -- --host 0.0.0.0 --port 5173",
+    "build": "npm --prefix frontend run build",
+    "start": "cd backend && py -m uvicorn app:app --host 0.0.0.0 --port 8000",
+    "serve": "npm run build && npm run start",
+    "test": "py -m unittest discover -s backend\\tests -v",
+    "check": "npm run test && npm run build"
   },
-  "keywords": [],
+  "keywords": [
+    "fastapi",
+    "vite",
+    "scraper",
+    "pocketfm"
+  ],
   "author": "",
-  "license": "ISC",
+  "license": "UNLICENSED",
   "dependencies": {
     "concurrently": "^9.2.1"
   }
