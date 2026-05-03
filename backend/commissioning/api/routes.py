@@ -377,15 +377,18 @@ def sync_google_sheet(batch_id: int, payload: SheetSyncRequest, db: Session = De
     batch = _get_batch_or_404(db, batch_id)
     sheet_url = payload.sheet_url or batch.source_sheet_url or DEFAULT_SHEET_URL
     worksheet_name = payload.worksheet_name or batch.source_sheet_worksheet or DEFAULT_WORKSHEET_NAME
-    if payload.mode == "pull-from-sheet":
-        return pull_from_sheet(db, batch, sheet_url, worksheet_name)
-    if payload.mode == "push-selected-fields":
-        return push_to_sheet(
-            db,
-            batch,
-            sheet_url=sheet_url,
-            worksheet_name=worksheet_name,
-            families=payload.families,
-            overwrite=payload.overwrite,
-        )
+    try:
+        if payload.mode == "pull-from-sheet":
+            return pull_from_sheet(db, batch, sheet_url, worksheet_name)
+        if payload.mode == "push-selected-fields":
+            return push_to_sheet(
+                db,
+                batch,
+                sheet_url=sheet_url,
+                worksheet_name=worksheet_name,
+                families=payload.families,
+                overwrite=payload.overwrite,
+            )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     raise HTTPException(status_code=400, detail="Unsupported sync mode")

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 
 from sqlalchemy.orm import Session
@@ -17,10 +18,25 @@ from ..settings import (
 if str(WORKSPACE_ROOT) not in sys.path:
     sys.path.insert(0, str(WORKSPACE_ROOT))
 
-from sheets_handler import batch_update_cells, read_sheet_as_df  # type: ignore
+logger = logging.getLogger(__name__)
+_SHEET_HANDLER_IMPORT_ERROR: Exception | None = None
+
+try:
+    from sheets_handler import batch_update_cells, read_sheet_as_df  # type: ignore
+except Exception as exc:  # pragma: no cover - optional local integration
+    batch_update_cells = None
+    read_sheet_as_df = None
+    _SHEET_HANDLER_IMPORT_ERROR = exc
+
+
+def _require_sheet_handler() -> None:
+    if read_sheet_as_df is None or batch_update_cells is None:
+        logger.warning("Google Sheet sync unavailable: %s", _SHEET_HANDLER_IMPORT_ERROR)
+        raise RuntimeError("Google Sheet sync is unavailable in this deployment because sheets_handler is not packaged.")
 
 
 def pull_from_sheet(db: Session, batch: Batch, sheet_url: str, worksheet_name: str) -> dict:
+    _require_sheet_handler()
     df = read_sheet_as_df(sheet_url=sheet_url, worksheet_name=worksheet_name)
     imported = 0
     for _, row in df.iterrows():
@@ -98,6 +114,7 @@ def push_to_sheet(
     families: list[str] | None = None,
     overwrite: bool = False,
 ) -> dict:
+    _require_sheet_handler()
     target_url = sheet_url or batch.source_sheet_url or DEFAULT_SHEET_URL
     target_ws = worksheet_name or batch.source_sheet_worksheet or DEFAULT_WORKSHEET_NAME
     df = read_sheet_as_df(sheet_url=target_url, worksheet_name=target_ws)
