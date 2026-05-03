@@ -22,7 +22,7 @@ COMMISSIONING_DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DATABASE
 1. Push this repo to GitHub.
 2. In Render, choose **New > Blueprint**.
 3. Select this repo and let Render read `render.yaml`.
-4. Deploy the `pocketfm-backend` service.
+4. Deploy the `pocketfm-scraper-tool` service.
 5. Open `https://YOUR-SERVICE.onrender.com/api/health`; it should return `{"status":"ok"}`.
 6. Open `https://YOUR-SERVICE.onrender.com/`; the Vite UI should load from the same service.
 

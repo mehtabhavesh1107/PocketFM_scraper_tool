@@ -57,9 +57,9 @@ Use the Blueprint in `render.yaml`.
 
 ```text
 services:
-  pocketfm-backend  # Docker web service
+pocketfm-scraper-tool  # Docker web service
 databases:
-  pocketfm-db       # Postgres
+pocketfm-scraper-db    # Postgres
 ```
 
 Render builds the frontend inside Docker, installs backend dependencies, installs Chromium for Playwright, and runs:
