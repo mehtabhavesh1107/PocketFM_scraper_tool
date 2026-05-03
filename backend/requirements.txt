@@ -12,3 +12,4 @@ gspread
 google-auth
 python-dotenv
 ddgs
+psycopg2-binary

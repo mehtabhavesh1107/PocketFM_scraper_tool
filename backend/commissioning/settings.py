@@ -6,14 +6,19 @@ from pathlib import Path
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 REPO_DIR = BACKEND_DIR.parent
 WORKSPACE_ROOT = REPO_DIR.parent
+IS_VERCEL = bool(os.getenv("VERCEL"))
+VERCEL_TMP_DIR = Path(os.getenv("TMPDIR", "/tmp")) / "pocketfm"
 
 
 def _path_from_env(name: str, default: Path) -> Path:
     return Path(os.getenv(name, str(default))).expanduser()
 
 
-DATA_DIR = _path_from_env("COMMISSIONING_DATA_DIR", BACKEND_DIR / "backend_data")
-GENERATED_DIR = _path_from_env("COMMISSIONING_GENERATED_DIR", BACKEND_DIR / "generated")
+DEFAULT_DATA_DIR = VERCEL_TMP_DIR / "backend_data" if IS_VERCEL else BACKEND_DIR / "backend_data"
+DEFAULT_GENERATED_DIR = VERCEL_TMP_DIR / "generated" if IS_VERCEL else BACKEND_DIR / "generated"
+
+DATA_DIR = _path_from_env("COMMISSIONING_DATA_DIR", DEFAULT_DATA_DIR)
+GENERATED_DIR = _path_from_env("COMMISSIONING_GENERATED_DIR", DEFAULT_GENERATED_DIR)
 DATABASE_PATH = DATA_DIR / "commissioning.db"
 DATABASE_URL = os.getenv("COMMISSIONING_DATABASE_URL", f"sqlite:///{DATABASE_PATH.as_posix()}")
 DEFAULT_SHEET_URL = os.getenv(
