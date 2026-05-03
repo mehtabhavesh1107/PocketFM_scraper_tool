@@ -6,12 +6,14 @@ import './App.css';
 // deployed domain) can reach the API through the dev-server / reverse proxy. Override with
 // VITE_API_BASE_URL only when the API lives on a separate origin.
 const API_BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api').replace(/\/$/, '');
+const WORKSPACE_KEY = 'pocketfm_workspace_id';
 
 type PageId = 'dashboard' | 'scrapping' | 'mapping' | 'benchmark' | 'outreach' | 'export';
 type SourceType = 'amazon' | 'goodreads' | 'shared';
 
 interface Batch {
   id: number;
+  workspace_id: string;
   name: string;
   genre: string;
   subgenre: string;
@@ -19,6 +21,13 @@ interface Batch {
   status: string;
   created_at: string;
   updated_at: string;
+}
+
+interface BootstrapResponse {
+  batch: Batch;
+  runs: Batch[];
+  summary: BatchSummary;
+  active_job?: Job | null;
 }
 
 interface BatchSummary {
@@ -243,8 +252,30 @@ const initialSourceInputs: Record<'amazon' | 'goodreads', SourceInput[]> = {
   ],
 };
 
+function createWorkspaceId(): string {
+  const random = typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  return `ws-${random}`;
+}
+
+function getWorkspaceId(): string {
+  if (typeof window === 'undefined') return 'public';
+  const existing = window.localStorage.getItem(WORKSPACE_KEY);
+  if (existing) return existing;
+  const created = createWorkspaceId();
+  window.localStorage.setItem(WORKSPACE_KEY, created);
+  return created;
+}
+
+function emptySourceInputs(): Record<'amazon' | 'goodreads', SourceInput[]> {
+  return {
+    amazon: initialSourceInputs.amazon.map((row) => ({ ...row })),
+    goodreads: initialSourceInputs.goodreads.map((row) => ({ ...row })),
+  };
+}
+
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
+  headers.set('X-Workspace-Id', getWorkspaceId());
   if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
@@ -329,14 +360,16 @@ function stars(value?: number | null): string {
 }
 
 function App() {
+  const [workspaceId] = useState(() => getWorkspaceId());
   const [activePage, setActivePage] = useState<PageId>('dashboard');
   const [batch, setBatch] = useState<Batch | null>(null);
+  const [runs, setRuns] = useState<Batch[]>([]);
   const [summary, setSummary] = useState<BatchSummary | null>(null);
   const [books, setBooks] = useState<Book[]>([]);
   const [dataQuality, setDataQuality] = useState<DataQualityReport | null>(null);
   const [schemas, setSchemas] = useState<Partial<Record<SourceType, StoredSchema>>>({});
   const [schemaTab, setSchemaTab] = useState<SourceType>('amazon');
-  const [sourceInputs, setSourceInputs] = useState(initialSourceInputs);
+  const [sourceInputs, setSourceInputs] = useState(emptySourceInputs);
   const [activeJob, setActiveJob] = useState<Job | null>(null);
   const [notice, setNotice] = useState('');
   const [error, setError] = useState('');
@@ -394,13 +427,67 @@ function App() {
   async function bootstrap() {
     setError('');
     try {
-      const data = await api<{ batch: Batch; summary: BatchSummary; active_job?: Job | null }>('/bootstrap', { method: 'POST' });
+      const data = await api<BootstrapResponse>('/bootstrap', { method: 'POST' });
       setBatch(data.batch);
+      setRuns(data.runs || [data.batch]);
       setSummary(data.summary);
       setActiveJob(data.active_job || null);
-      await Promise.all([loadBooks(data.batch.id), loadSources(data.batch.id), loadReferenceSchema(), loadDataQuality(data.batch.id)]);
+      await Promise.all([loadBooks(data.batch.id, true), loadSources(data.batch.id), loadReferenceSchema(data.batch.id), loadDataQuality(data.batch.id)]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not connect to backend');
+    }
+  }
+
+  async function loadRuns() {
+    const data = await api<Batch[]>('/batches');
+    setRuns(data);
+    return data;
+  }
+
+  async function loadBatch(batchId: number, nextRuns?: Batch[]) {
+    setError('');
+    setNotice('');
+    const [nextBatch, nextSummary] = await Promise.all([
+      api<Batch>(`/batches/${batchId}`),
+      api<BatchSummary>(`/batches/${batchId}/summary`),
+    ]);
+    setBatch(nextBatch);
+    setSummary(nextSummary);
+    setActiveJob(null);
+    setBooks([]);
+    setDataQuality(null);
+    setSourceInputs(emptySourceInputs());
+    setSelectedEvalId(null);
+    setSelectedOutreachId(null);
+    if (nextRuns) setRuns(nextRuns);
+    await Promise.all([loadBooks(batchId, true), loadSources(batchId), loadReferenceSchema(batchId), loadDataQuality(batchId)]);
+  }
+
+  async function selectRun(batchId: number) {
+    try {
+      await loadBatch(batchId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not load run');
+    }
+  }
+
+  async function createNewRun() {
+    try {
+      const created = await api<Batch>('/batches', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: `Run ${new Date().toLocaleString()}`,
+          genre: '',
+          subgenre: '',
+          description: '',
+        }),
+      });
+      const nextRuns = await loadRuns();
+      await loadBatch(created.id, nextRuns);
+      setNotice('New run ready. Paste Amazon or Goodreads links to start.');
+      setActivePage('scrapping');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not create run');
     }
   }
 
@@ -410,12 +497,17 @@ function App() {
     setSummary(data);
   }
 
-  async function loadBooks(batchId = batch?.id) {
+  async function loadBooks(batchId = batch?.id, resetSelection = false) {
     if (!batchId) return;
     const page = await api<BooksPage>(`/batches/${batchId}/books?page_size=500`);
     setBooks(page.items);
-    if (!selectedEvalId && page.items[0]) setSelectedEvalId(page.items[0].id);
-    if (!selectedOutreachId && page.items[0]) setSelectedOutreachId(page.items[0].id);
+    if (resetSelection) {
+      setSelectedEvalId(page.items[0]?.id || null);
+      setSelectedOutreachId(page.items[0]?.id || null);
+    } else {
+      if (!selectedEvalId && page.items[0]) setSelectedEvalId(page.items[0].id);
+      if (!selectedOutreachId && page.items[0]) setSelectedOutreachId(page.items[0].id);
+    }
   }
 
   async function loadDataQuality(batchId = batch?.id) {
@@ -427,8 +519,11 @@ function App() {
   async function loadSources(batchId = batch?.id) {
     if (!batchId) return;
     const sources = await api<SourceRow[]>(`/batches/${batchId}/sources`);
-    if (!sources.length) return;
-    const next = { amazon: [...initialSourceInputs.amazon], goodreads: [...initialSourceInputs.goodreads] };
+    const next = emptySourceInputs();
+    if (!sources.length) {
+      setSourceInputs(next);
+      return;
+    }
     (['amazon', 'goodreads'] as const).forEach((source) => {
       sources
         .filter((item) => item.source_type === source)
@@ -443,12 +538,12 @@ function App() {
     setSourceInputs(next);
   }
 
-  async function loadReferenceSchema() {
+  async function loadReferenceSchema(batchId = batch?.id) {
     const data = await api<{ fields: FieldDefinition[] }>('/reference-schema');
     const selected = data.fields.map((field) => field.name);
     const referenceSchema: StoredSchema = {
       id: 0,
-      batch_id: batch?.id || null,
+      batch_id: batchId || null,
       source_type: 'reference',
       name: 'Local reference sheet',
       file_name: 'contact_live_sheet_snapshot.csv',
@@ -462,7 +557,7 @@ function App() {
 
   async function refreshAll() {
     if (!batch) return;
-    await Promise.all([loadBooks(batch.id), loadSummary(batch.id), loadSources(batch.id), loadDataQuality(batch.id)]);
+    await Promise.all([loadBooks(batch.id), loadSummary(batch.id), loadSources(batch.id), loadDataQuality(batch.id), loadRuns()]);
   }
 
   function nav(page: PageId) {
@@ -642,7 +737,8 @@ function App() {
       method: 'POST',
       body: JSON.stringify({ export_format: format, profile }),
     });
-    window.open(`${API_BASE}/exports/${record.id}/download`, '_blank');
+    const downloadUrl = `${API_BASE}/exports/${record.id}/download?workspace_id=${encodeURIComponent(workspaceId)}`;
+    window.open(downloadUrl, '_blank');
     await loadDataQuality(batch.id);
     setNotice(`${format.toUpperCase()} export created with ${record.row_count} rows.`);
   }
@@ -726,7 +822,11 @@ function App() {
             <div className="ring-track">
               <div className="ring-fill" style={{ width: `${Math.round(((summary?.shortlisted_books || 0) / Math.max(summary?.total_books || 1, 1)) * 100)}%` }} />
             </div>
-            <div className="sidebar-footnote">Batch: {batch?.name || 'Connecting...'}</div>
+            <div className="sidebar-footnote">
+              Workspace: {workspaceId.slice(-8)}
+              <br />
+              Run: {batch?.name || 'Connecting...'}
+            </div>
           </div>
         </aside>
 
@@ -742,10 +842,15 @@ function App() {
           {activePage === 'dashboard' && (
             <DashboardPage
               books={books}
+              batch={batch}
+              runs={runs}
+              workspaceId={workspaceId}
               summary={summary}
               metrics={metrics}
               genres={genres}
               dataQuality={dataQuality}
+              selectRun={selectRun}
+              createNewRun={createNewRun}
               nav={nav}
             />
           )}
@@ -891,17 +996,27 @@ function JobProgressCard({ job }: { job: Job }) {
 
 function DashboardPage({
   books,
+  batch,
+  runs,
+  workspaceId,
   summary,
   metrics,
   genres,
   dataQuality,
+  selectRun,
+  createNewRun,
   nav,
 }: {
   books: Book[];
+  batch: Batch | null;
+  runs: Batch[];
+  workspaceId: string;
   summary: BatchSummary | null;
   metrics: ReturnType<typeof AppMetrics>;
   genres: string[];
   dataQuality: DataQualityReport | null;
+  selectRun: (batchId: number) => void;
+  createNewRun: () => void;
   nav: (page: PageId) => void;
 }) {
   const genreCounts = genres.reduce<Record<string, number>>((acc, genre) => {
@@ -917,9 +1032,32 @@ function DashboardPage({
   return (
     <section className="page active">
       <PageHead title="Commissioning Dashboard" desc="Overview of the current content acquisition pipeline">
-        <button className="btn btn-sm" onClick={() => nav('scrapping')}>+ New batch</button>
+        <button className="btn btn-sm" onClick={createNewRun}>+ New Run</button>
         <button className="btn btn-primary btn-sm" onClick={() => nav('benchmark')}>View shortlist →</button>
       </PageHead>
+
+      <div className="runs-panel">
+        <div className="runs-panel-head">
+          <div>
+            <div className="card-title">My Runs</div>
+            <div className="run-workspace">Anonymous workspace {workspaceId.slice(-8)}</div>
+          </div>
+          <button className="btn btn-sm" onClick={createNewRun}>New Run</button>
+        </div>
+        <div className="run-list">
+          {runs.length === 0 && <div className="empty-state">No runs yet</div>}
+          {runs.map((run) => (
+            <button
+              key={run.id}
+              className={`run-chip ${batch?.id === run.id ? 'active' : ''}`}
+              onClick={() => selectRun(run.id)}
+            >
+              <span>{run.name || `Run ${run.id}`}</span>
+              <small>{new Date(run.updated_at).toLocaleString()}</small>
+            </button>
+          ))}
+        </div>
+      </div>
 
       <div className="pipeline-stages">
         <Stage value={totalSources} label="Links saved" color="var(--p600)" width={totalSources ? 100 : 0} />

@@ -23,6 +23,7 @@ class Batch(TimestampMixin, Base):
     __tablename__ = "batches"
 
     id: Mapped[int] = mapped_column(primary_key=True)
+    workspace_id: Mapped[str] = mapped_column(String(100), default="public", index=True)
     name: Mapped[str] = mapped_column(String(200))
     genre: Mapped[str] = mapped_column(String(200), default="")
     subgenre: Mapped[str] = mapped_column(String(200), default="")

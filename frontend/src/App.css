@@ -128,6 +128,16 @@ label.field-label { font-size:11px;color:var(--g600);display:block;margin-bottom
 .quick-actions { display:flex;gap:10px;flex-wrap:wrap; }
 .empty-state { padding:18px 0;color:var(--g400);font-size:12px; }
 
+.runs-panel { background:#fff;border:0.5px solid #e0ddd4;border-radius:8px;padding:1rem;margin-bottom:1rem; }
+.runs-panel-head { display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:10px; }
+.run-workspace { font-size:11px;color:var(--g400);margin-top:-6px; }
+.run-list { display:flex;gap:8px;overflow-x:auto;padding-bottom:2px; }
+.run-chip { min-width:210px;max-width:260px;border:0.5px solid #d3d1c7;border-radius:8px;background:#fafaf8;color:#1a1a18;padding:9px 11px;text-align:left;cursor:pointer;display:flex;flex-direction:column;gap:3px; }
+.run-chip:hover { border-color:var(--p200);background:var(--p50); }
+.run-chip.active { border-color:var(--p600);background:var(--p50);color:var(--p800); }
+.run-chip span { font-size:12px;font-weight:500;white-space:nowrap;overflow:hidden;text-overflow:ellipsis; }
+.run-chip small { font-size:10px;color:var(--g400); }
+
 .pipeline-stages { display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:1rem; }
 .pipe-stage { background:#fff;border:0.5px solid #e0ddd4;border-radius:8px;padding:14px;text-align:center; }
 .pipe-stage-num { font-size:24px;font-weight:500;color:#1a1a18;margin-bottom:4px; }

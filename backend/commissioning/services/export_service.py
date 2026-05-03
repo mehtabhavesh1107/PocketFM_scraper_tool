@@ -460,7 +460,10 @@ def generate_export(db: Session, batch: Batch, export_format: str, *, profile: s
 
     stamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
     profile_slug = normalized_profile.replace("_compatible", "").replace("_diagnostic", "_diag")
-    path = GENERATED_DIR / f"batch_{batch.id}_{profile_slug}_{stamp}.{ext}"
+    workspace_slug = re.sub(r"[^A-Za-z0-9_.:-]+", "-", batch.workspace_id or "public").strip("-") or "public"
+    output_dir = GENERATED_DIR / workspace_slug / f"batch_{batch.id}"
+    output_dir.mkdir(parents=True, exist_ok=True)
+    path = output_dir / f"{profile_slug}_{stamp}.{ext}"
 
     if ext == "csv":
         frame.to_csv(path, index=False, encoding="utf-8")
@@ -493,6 +496,7 @@ def generate_export(db: Session, batch: Batch, export_format: str, *, profile: s
         metadata_json={
             "columns": list(frame.columns),
             "profile": normalized_profile,
+            "workspace_id": batch.workspace_id,
             "quality_summary": {key: value for key, value in quality.items() if key != "rows"},
         },
     )

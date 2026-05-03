@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from sqlalchemy import create_engine
 from sqlalchemy import event
+from sqlalchemy import inspect
+from sqlalchemy import text
 from sqlalchemy.orm import DeclarativeBase, sessionmaker
 
 from .settings import DATABASE_URL, ensure_directories
@@ -41,3 +43,15 @@ def init_db() -> None:
     from . import models  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    _ensure_runtime_columns()
+
+
+def _ensure_runtime_columns() -> None:
+    inspector = inspect(engine)
+    if "batches" not in inspector.get_table_names():
+        return
+    batch_columns = {column["name"] for column in inspector.get_columns("batches")}
+    with engine.begin() as connection:
+        if "workspace_id" not in batch_columns:
+            connection.execute(text("ALTER TABLE batches ADD COLUMN workspace_id VARCHAR(100) DEFAULT 'public' NOT NULL"))
+        connection.execute(text("CREATE INDEX IF NOT EXISTS ix_batches_workspace_id ON batches (workspace_id)"))

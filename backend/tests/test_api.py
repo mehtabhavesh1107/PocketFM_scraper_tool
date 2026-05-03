@@ -94,6 +94,41 @@ class CommissioningApiTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_anonymous_workspaces_have_isolated_runs(self):
+        async def run():
+            workspace_a = {"X-Workspace-Id": "ws-api-a"}
+            workspace_b = {"X-Workspace-Id": "ws-api-b"}
+
+            boot_a = await self._request("POST", "/api/bootstrap", headers=workspace_a)
+            boot_b = await self._request("POST", "/api/bootstrap", headers=workspace_b)
+            self.assertEqual(boot_a.status_code, 200)
+            self.assertEqual(boot_b.status_code, 200)
+            batch_a = boot_a.json()["batch"]
+            batch_b = boot_b.json()["batch"]
+            self.assertNotEqual(batch_a["id"], batch_b["id"])
+            self.assertEqual(batch_a["workspace_id"], "ws-api-a")
+            self.assertEqual(batch_b["workspace_id"], "ws-api-b")
+
+            save_a = await self._request(
+                "PUT",
+                f"/api/batches/{batch_a['id']}/sources",
+                headers=workspace_a,
+                json=[{"source_type": "amazon", "url": "https://www.amazon.com/dp/B0TEST1234", "max_results": 0}],
+            )
+            self.assertEqual(save_a.status_code, 200)
+
+            list_a = await self._request("GET", "/api/batches", headers=workspace_a)
+            list_b = await self._request("GET", "/api/batches", headers=workspace_b)
+            self.assertEqual([item["workspace_id"] for item in list_a.json()], ["ws-api-a"])
+            self.assertEqual([item["workspace_id"] for item in list_b.json()], ["ws-api-b"])
+
+            blocked = await self._request("GET", f"/api/batches/{batch_a['id']}/sources", headers=workspace_b)
+            self.assertEqual(blocked.status_code, 404)
+
+        import asyncio
+
+        asyncio.run(run())
+
     def test_upload_schema(self):
         async def run():
             response = await self._request(
