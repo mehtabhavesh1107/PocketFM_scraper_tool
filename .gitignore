@@ -30,3 +30,5 @@ backend/scratch/
 backend/backend_data/
 backend/generated/
 keyword_state_*.json
+
+.vercel

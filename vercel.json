@@ -6,7 +6,7 @@
     "api/index.py": {
       "includeFiles": "backend/**",
       "memory": 2048,
-      "maxDuration": 900
+      "maxDuration": 300
     }
   },
   "rewrites": [

@@ -31,4 +31,4 @@ COMMISSIONING_JOB_WORKERS=2
 ## Notes
 
 - The local-only contact discovery helper is optional in this deployment. If it is not present, the backend still runs and skips contact enrichment instead of crashing.
-- For long production scrape workloads, a durable queue and persistent object storage should replace in-process jobs and `/tmp` export files.
+- Vercel Hobby limits each API invocation to 300 seconds. For longer production scrape workloads, a durable queue and persistent object storage should replace in-process jobs and `/tmp` export files.
