@@ -12,6 +12,8 @@ export default defineConfig({
   },
   server: {
     host: true,            // bind on 0.0.0.0 so LAN colleagues can hit it
+    // Permit temporary tunnel hostnames such as trycloudflare.com/ngrok for demos.
+    allowedHosts: true,
     port: 5173,
     strictPort: true,
     proxy: {
