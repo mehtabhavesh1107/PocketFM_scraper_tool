@@ -4,7 +4,10 @@
   "outputDirectory": "frontend/dist",
   "functions": {
     "api/index.py": {
-      "includeFiles": "backend/**",
+      "includeFiles": [
+        "backend/**",
+        "frontend/dist/**"
+      ],
       "memory": 2048,
       "maxDuration": 300
     }
