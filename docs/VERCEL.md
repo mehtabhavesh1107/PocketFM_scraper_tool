@@ -1,15 +1,13 @@
 # Vercel Deployment
 
-This repo is configured for Vercel Services, so the Vite dashboard and FastAPI backend deploy together on one public Vercel domain.
+This repo is configured for a single Vercel project with a static Vite dashboard and a Python FastAPI serverless function mounted at `/api`.
 
 ## Project Setup
 
 1. Import `Navya123445/PocketFM_scraper_tool` into Vercel.
 2. Keep the root directory as `./`.
-3. Select the `Services` application preset.
-4. Make sure Vercel sees these services from `vercel.json`:
-   - `frontend` at `/`
-   - `backend` at `/api`
+3. Use the normal Vercel project import flow. Do not use the Services preset.
+4. Leave build settings controlled by `vercel.json`.
 5. Do not set `VITE_API_BASE_URL` for the normal Vercel deployment. The frontend defaults to `/api`.
 
 ## Recommended Environment Variables
