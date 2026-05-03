@@ -57,7 +57,7 @@ router = APIRouter(prefix="/api", tags=["commissioning"])
 def _get_batch_or_404(db: Session, batch_id: int) -> Batch:
     batch = db.get(Batch, batch_id)
     if batch is None:
-        raise HTTPException(status_code=404, detail="Batch not found")
+        batch = ensure_working_batch(db, batch_id=batch_id)
     return batch
 
 

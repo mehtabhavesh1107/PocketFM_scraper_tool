@@ -71,6 +71,29 @@ class CommissioningApiTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_missing_batch_is_auto_created_for_cloud_storage_recovery(self):
+        async def run():
+            sources = await self._request("GET", "/api/batches/987/sources")
+            self.assertEqual(sources.status_code, 200)
+            self.assertEqual(sources.json(), [])
+
+            db = SessionLocal()
+            recovered = db.get(Batch, 987)
+            db.close()
+            self.assertIsNotNone(recovered)
+
+            save = await self._request(
+                "PUT",
+                "/api/batches/987/sources",
+                json=[{"source_type": "amazon", "url": "https://www.amazon.com/dp/B0TEST1234", "max_results": 0}],
+            )
+            self.assertEqual(save.status_code, 200)
+            self.assertEqual(len(save.json()), 1)
+
+        import asyncio
+
+        asyncio.run(run())
+
     def test_upload_schema(self):
         async def run():
             response = await self._request(
