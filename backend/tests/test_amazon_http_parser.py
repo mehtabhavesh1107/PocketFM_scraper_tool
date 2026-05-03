@@ -322,6 +322,14 @@ class AmazonHttpParserTests(unittest.TestCase):
         self.assertEqual(items[0].url, "https://www.amzn.com/dp/B0FKTTYMVG")
         self.assertEqual(items[0].raw["source"], "path_asin")
 
+    def test_html_escaped_see_more_asins_are_expanded_without_listing_fetch(self):
+        items = discover_amazon_items(
+            " https://www.amazon.com/amz-books/seeMore/?_encoding=UTF8&amp;asins=B0FKTTYMVG%2C B0FJNF8PP6&amp;category=Mystery "
+        )
+
+        self.assertEqual([item.asin for item in items], ["B0FKTTYMVG", "B0FJNF8PP6"])
+        self.assertEqual(items[0].raw["source"], "query_asins")
+
 
 if __name__ == "__main__":
     unittest.main()

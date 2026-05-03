@@ -80,6 +80,32 @@ class CommissioningApiTests(unittest.TestCase):
 
         self.assertEqual(records, [{"title": "Short Domain"}])
 
+    def test_source_urls_are_unescaped_before_storage(self):
+        async def run():
+            response = await self._request("POST", "/api/batches", json={"name": "Escaped URL"})
+            self.assertEqual(response.status_code, 200)
+            batch = response.json()
+            sources = await self._request(
+                "POST",
+                f"/api/batches/{batch['id']}/sources",
+                json=[
+                    {
+                        "source_type": "amazon",
+                        "url": " https://www.amazon.com/amz-books/seeMore/?_encoding=UTF8&amp;asins=B0FKTTYMVG%2C B0FJNF8PP6 ",
+                        "max_results": 0,
+                    }
+                ],
+            )
+            self.assertEqual(sources.status_code, 200)
+            stored_url = sources.json()[0]["url"]
+            self.assertIn("&asins=", stored_url)
+            self.assertNotIn("&amp;", stored_url)
+            self.assertNotIn(" ", stored_url)
+
+        import asyncio
+
+        asyncio.run(run())
+
     def test_fast_scrape_endpoint_queues_fast_stage(self):
         async def run():
             response = await self._request(

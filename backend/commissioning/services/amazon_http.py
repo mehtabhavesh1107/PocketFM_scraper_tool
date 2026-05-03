@@ -241,10 +241,24 @@ def _looks_like_search(url: str) -> bool:
     return path.startswith("/s") or path == "/s"
 
 
+def _normalize_url_text(url: str) -> str:
+    return re.sub(r"\s+", "", html_lib.unescape(url or "").strip())
+
+
+def _normalized_query_key(key: str) -> str:
+    normalized = (key or "").strip().lower()
+    while normalized.startswith("amp;"):
+        normalized = normalized[4:]
+    return normalized
+
+
 def _asins_from_query(url: str) -> list[str]:
-    parsed = urlparse(url)
-    params = parse_qs(parsed.query)
-    raw_values = params.get("asins", []) + params.get("asin", [])
+    parsed = urlparse(_normalize_url_text(url))
+    params = parse_qs(parsed.query, keep_blank_values=True)
+    raw_values: list[str] = []
+    for key, values in params.items():
+        if _normalized_query_key(key) in {"asins", "asin"}:
+            raw_values.extend(values)
     asins: list[str] = []
     seen: set[str] = set()
     for raw_value in raw_values:
@@ -258,7 +272,7 @@ def _asins_from_query(url: str) -> list[str]:
 
 
 def _asin_from_path(url: str) -> str:
-    parsed = urlparse(url)
+    parsed = urlparse(_normalize_url_text(url))
     match = _PATH_ASIN_RE.search(parsed.path or "")
     if match:
         return match.group(1).upper()

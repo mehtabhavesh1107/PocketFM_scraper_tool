@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import html as html_lib
+import re
 from datetime import datetime
 from typing import Any
 from urllib.parse import urlparse
@@ -94,7 +96,7 @@ class SourceLinkCreate(BaseModel):
     @field_validator("url")
     @classmethod
     def _validate_url(cls, value: str) -> str:
-        cleaned = (value or "").strip()
+        cleaned = re.sub(r"\s+", "", html_lib.unescape(value or "").strip())
         if not cleaned:
             raise ValueError("url is required")
         parsed = urlparse(cleaned)
