@@ -21,6 +21,10 @@ DEFAULT_PAGES_PER_BOOK = 320
 WORDS_PER_PAGE = 250
 WORDS_PER_HOUR = 10000
 
+DEFAULT_TROPE = "Needgap"
+DEFAULT_REV_SHARE_MIN = "13%"
+DEFAULT_REV_SHARE_MAX = "18%"
+
 GENERIC_CATEGORIES = {
     "",
     "books",
@@ -129,6 +133,52 @@ def _parse_int(value) -> int | None:
         return int(float(str(value).replace(",", "").strip()))
     except ValueError:
         return None
+
+
+def _derived_hours(book: Book) -> int | None:
+    hours = _parse_int(book.total_hours)
+    if hours:
+        return hours
+    words = book.word_count or _parse_int(book.total_word_count)
+    if words:
+        return max(1, round(words / WORDS_PER_HOUR))
+    return None
+
+
+def commissioning_tier_profile(book: Book) -> dict[str, str]:
+    """Return the Pocket FM MG tier profile for a mapped book.
+
+    Tiers are based on Goodreads review count and the calculated length in hours.
+    The Goodreads count is preferred because these columns are intended for the
+    post-Goodreads final sheet; Amazon review count is used only as a fallback.
+    """
+    hours = _derived_hours(book)
+    reviews = _parse_int(book.goodreads_rating_count)
+    if reviews is None:
+        reviews = book.rating_count or 0
+    hours_value = hours or 0
+
+    if reviews >= 20_000 and hours_value >= 80:
+        tier, mg_min, mg_max = "Tier 1", "10k", "15k"
+    elif reviews >= 20_000 and hours_value >= 50:
+        tier, mg_min, mg_max = "Tier 2", "10k", "12.5k"
+    elif reviews >= 5_000 and hours_value >= 80:
+        tier, mg_min, mg_max = "Tier 3", "7.5k", "10k"
+    elif reviews >= 5_000 and hours_value >= 50:
+        tier, mg_min, mg_max = "Tier 4", "3k", "5k"
+    else:
+        tier, mg_min, mg_max = "Tier 5", "No MG", "No MG"
+
+    return {
+        "Tier": tier,
+        "GR Ratings": str(reviews) if reviews else "",
+        "Trope": DEFAULT_TROPE,
+        "Length": str(hours) if hours else "",
+        "MG (Min)": mg_min,
+        "MG (Max)": mg_max,
+        "Rev share (min)": DEFAULT_REV_SHARE_MIN,
+        "Rev Share (max)": DEFAULT_REV_SHARE_MAX,
+    }
 
 
 def _book_type(book: Book) -> str:

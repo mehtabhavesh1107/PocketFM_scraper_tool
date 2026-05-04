@@ -13,7 +13,7 @@ from sqlalchemy.orm import Session
 from ..models import Batch, Book, ExportRecord
 from ..settings import GENERATED_DIR
 from .data_quality_service import batch_data_quality
-from .mapping_service import apply_benchmark_mapping
+from .mapping_service import apply_benchmark_mapping, commissioning_tier_profile
 from .reference_schema import get_reference_columns
 
 
@@ -31,6 +31,14 @@ SAMPLE_COMPATIBLE_COLUMNS = [
     "Customer Reviews",
     "Goodreads rating",
     "Goodreads no of rating",
+    "Tier",
+    "GR Ratings",
+    "Trope",
+    "Length",
+    "MG (Min)",
+    "MG (Max)",
+    "Rev share (min)",
+    "Rev Share (max)",
     "Print Length",
     "Book number",
     "Format",
@@ -350,6 +358,7 @@ def _apply_diagnostic_columns(row: dict, book: Book, quality_row: dict | None) -
 def flatten_book(book: Book, columns: list[str] | None = None) -> dict:
     row = {column: "" for column in (columns or get_reference_columns())}
     amazon_payload = _amazon_payload(book)
+    tier_profile = commissioning_tier_profile(book)
     rating_value = book.rating
     rating_count_value = book.rating_count
     customer_reviews = _filled(amazon_payload.get("customer_reviews"), "")
@@ -371,6 +380,8 @@ def flatten_book(book: Book, columns: list[str] | None = None) -> dict:
     _set(row, "Customer Reviews", customer_reviews)
     _set(row, "Goodreads rating", book.goodreads_rating)
     _set(row, "Goodreads no of rating", book.goodreads_rating_count)
+    for column, value in tier_profile.items():
+        _set(row, column, value)
     _set(row, "Print Length", book.print_length)
     _set(row, "Book number", book.book_number)
     _set(row, "Format", _clean_format(book.format))

@@ -376,6 +376,115 @@ function audioScore(book: Book): number {
   return book.audio_score || 0;
 }
 
+type MappingFilterKey =
+  | 'title'
+  | 'author'
+  | 'source'
+  | 'rating'
+  | 'reviews'
+  | 'tier'
+  | 'length'
+  | 'mgMin'
+  | 'mgMax'
+  | 'genre'
+  | 'subGenre'
+  | 'type'
+  | 'seriesBooks'
+  | 'audioScore'
+  | 'wordCount'
+  | 'email';
+
+type MappingSortKey = 'title' | 'author' | 'rating' | 'rating_count' | 'word_count' | 'tier' | 'length';
+
+interface TierProfile {
+  tier: string;
+  grRatings: number;
+  trope: string;
+  length: number;
+  mgMin: string;
+  mgMax: string;
+  revShareMin: string;
+  revShareMax: string;
+}
+
+function parseMetric(value?: string | number | null): number {
+  if (value === null || value === undefined || value === '') return 0;
+  if (typeof value === 'number') return Number.isFinite(value) ? value : 0;
+  const match = value.replace(/,/g, '').match(/\d+(?:\.\d+)?/);
+  return match ? Number(match[0]) : 0;
+}
+
+function bookLengthHours(book: Book): number {
+  const explicitHours = parseMetric(book.total_hours);
+  if (explicitHours) return Math.round(explicitHours);
+  const words = wordCount(book);
+  return words ? Math.max(1, Math.round(words / 10000)) : 0;
+}
+
+function goodreadsReviewCount(book: Book): number {
+  return parseMetric(book.goodreads_rating_count) || book.rating_count || 0;
+}
+
+function tierProfile(book: Book): TierProfile {
+  const length = bookLengthHours(book);
+  const grRatings = goodreadsReviewCount(book);
+  let tier = 'Tier 5';
+  let mgMin = 'No MG';
+  let mgMax = 'No MG';
+
+  if (grRatings >= 20000 && length >= 80) {
+    tier = 'Tier 1';
+    mgMin = '10k';
+    mgMax = '15k';
+  } else if (grRatings >= 20000 && length >= 50) {
+    tier = 'Tier 2';
+    mgMin = '10k';
+    mgMax = '12.5k';
+  } else if (grRatings >= 5000 && length >= 80) {
+    tier = 'Tier 3';
+    mgMin = '7.5k';
+    mgMax = '10k';
+  } else if (grRatings >= 5000 && length >= 50) {
+    tier = 'Tier 4';
+    mgMin = '3k';
+    mgMax = '5k';
+  }
+
+  return {
+    tier,
+    grRatings,
+    trope: 'Needgap',
+    length,
+    mgMin,
+    mgMax,
+    revShareMin: '13%',
+    revShareMax: '18%',
+  };
+}
+
+function mappingFilterValue(book: Book, key: MappingFilterKey): string {
+  const profile = tierProfile(book);
+  const values: Record<MappingFilterKey, string> = {
+    title: book.title || '-',
+    author: book.author || '-',
+    source: sourceFor(book),
+    rating: book.rating ? book.rating.toFixed(1) : '-',
+    reviews: fmtNumber(goodreadsReviewCount(book) || book.rating_count),
+    tier: profile.tier,
+    length: profile.length ? String(profile.length) : '-',
+    mgMin: profile.mgMin,
+    mgMax: profile.mgMax,
+    genre: book.genre || 'Unmapped',
+    subGenre: book.sub_genre || '-',
+    type: book.book_type || '-',
+    seriesBooks: String(seriesCount(book)),
+    audioScore: String(audioScore(book)),
+    wordCount: fmtNumber(wordCount(book)),
+    email: contactEmail(book) || '-',
+  };
+  return values[key];
+}
+
 function genreTagClass(genre = ''): string {
   const map: Record<string, string> = {
     Romance: 'tg-c',
@@ -411,7 +520,8 @@ function App() {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [genreFilter, setGenreFilter] = useState('');
-  const [sortKey, setSortKey] = useState<'title' | 'author' | 'rating' | 'rating_count' | 'word_count'>('title');
+  const [sortKey, setSortKey] = useState<MappingSortKey>('title');
+  const [columnFilters, setColumnFilters] = useState<Partial<Record<MappingFilterKey, string>>>({});
   const [filters, setFilters] = useState<Filters>({
     min_rating: 3.8,
     min_reviews: 5000,
@@ -813,6 +923,15 @@ function App() {
 
   const genres = useMemo(() => Array.from(new Set(books.map((book) => book.genre || '').filter(Boolean))).sort(), [books]);
   const jobRunning = isRunningJob(activeJob);
+  function setColumnFilter(key: MappingFilterKey, value: string) {
+    setColumnFilters((current) => {
+      const next = { ...current };
+      if (value) next[key] = value;
+      else delete next[key];
+      return next;
+    });
+  }
+
   const visibleMappingBooks = useMemo(() => {
     const term = search.trim().toLowerCase();
     return [...books]
@@ -823,14 +942,19 @@ function App() {
           (book.author || '').toLowerCase().includes(term) ||
           (book.genre || '').toLowerCase().includes(term);
         const matchesGenre = !genreFilter || book.genre === genreFilter;
-        return matchesTerm && matchesGenre;
+        const matchesColumnFilters = (Object.entries(columnFilters) as [MappingFilterKey, string][]).every(
+          ([key, value]) => !value || mappingFilterValue(book, key) === value,
+        );
+        return matchesTerm && matchesGenre && matchesColumnFilters;
       })
       .sort((left, right) => {
         if (sortKey === 'title' || sortKey === 'author') return String(left[sortKey] || '').localeCompare(String(right[sortKey] || ''));
+        if (sortKey === 'tier') return tierProfile(left).tier.localeCompare(tierProfile(right).tier);
+        if (sortKey === 'length') return bookLengthHours(right) - bookLengthHours(left);
         if (sortKey === 'word_count') return wordCount(right) - wordCount(left);
         return Number(right[sortKey] || 0) - Number(left[sortKey] || 0);
       });
-  }, [books, search, genreFilter, sortKey]);
+  }, [books, search, genreFilter, columnFilters, sortKey]);
 
   return (
     <div className="commissioning-app">
@@ -922,11 +1046,15 @@ function App() {
           {activePage === 'mapping' && (
             <MappingPage
               books={visibleMappingBooks}
+              allBooks={books}
               allGenres={genres}
               search={search}
               setSearch={setSearch}
               genreFilter={genreFilter}
               setGenreFilter={setGenreFilter}
+              columnFilters={columnFilters}
+              setColumnFilter={setColumnFilter}
+              clearColumnFilters={() => setColumnFilters({})}
               setSortKey={setSortKey}
               patchBook={patchBook}
               nav={nav}
@@ -1449,13 +1577,58 @@ function SourceCard({
   );
 }
 
+function FilterHeader({
+  label,
+  filterKey,
+  books,
+  filters,
+  onFilter,
+  onSort,
+}: {
+  label: string;
+  filterKey: MappingFilterKey;
+  books: Book[];
+  filters: Partial<Record<MappingFilterKey, string>>;
+  onFilter: (key: MappingFilterKey, value: string) => void;
+  onSort?: () => void;
+}) {
+  const options = useMemo(() => {
+    const values = Array.from(new Set(books.map((book) => mappingFilterValue(book, filterKey)).filter((value) => value && value !== '-')));
+    return values.sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' })).slice(0, 500);
+  }, [books, filterKey]);
+
+  return (
+    <th className={filters[filterKey] ? 'filtered-th' : ''}>
+      <button type="button" className="th-label" onClick={onSort}>
+        {label}
+        {onSort && <span className="sort-arrow">▲</span>}
+      </button>
+      <select
+        className="column-filter"
+        value={filters[filterKey] || ''}
+        onClick={(event) => event.stopPropagation()}
+        onChange={(event) => onFilter(filterKey, event.target.value)}
+      >
+        <option value="">All</option>
+        {options.map((value) => (
+          <option key={value} value={value}>{value}</option>
+        ))}
+      </select>
+    </th>
+  );
+}
+
 function MappingPage({
   books,
+  allBooks,
   allGenres,
   search,
   setSearch,
   genreFilter,
   setGenreFilter,
+  columnFilters,
+  setColumnFilter,
+  clearColumnFilters,
   setSortKey,
   patchBook,
   nav,
@@ -1463,12 +1636,16 @@ function MappingPage({
   jobRunning,
 }: {
   books: Book[];
+  allBooks: Book[];
   allGenres: string[];
   search: string;
   setSearch: (value: string) => void;
   genreFilter: string;
   setGenreFilter: (value: string) => void;
-  setSortKey: (value: 'title' | 'author' | 'rating' | 'rating_count' | 'word_count') => void;
+  columnFilters: Partial<Record<MappingFilterKey, string>>;
+  setColumnFilter: (key: MappingFilterKey, value: string) => void;
+  clearColumnFilters: () => void;
+  setSortKey: (value: MappingSortKey) => void;
   patchBook: (bookId: number, patch: Partial<Book>) => void;
   nav: (page: PageId) => void;
   runJob: (kind: JobKind) => void;
@@ -1488,6 +1665,7 @@ function MappingPage({
       ...books.map((book) => book.genre || '').filter(Boolean),
     ]),
   ).filter(Boolean);
+  const hasColumnFilters = Object.values(columnFilters).some(Boolean);
 
   return (
     <section className="page active">
@@ -1522,6 +1700,7 @@ function MappingPage({
           <option value="">All genres</option>
           {allGenres.map((genre) => <option key={genre}>{genre}</option>)}
         </select>
+        {hasColumnFilters && <button className="btn btn-sm" onClick={clearColumnFilters}>Clear column filters</button>}
       </div>
 
       <div className="card table-card">
@@ -1530,19 +1709,23 @@ function MappingPage({
             <thead>
               <tr>
                 <th><input type="checkbox" /></th>
-                <th onClick={() => setSortKey('title')}>Title <span className="sort-arrow">▲</span></th>
-                <th onClick={() => setSortKey('author')}>Author <span className="sort-arrow">▲</span></th>
-                <th>Source</th>
-                <th onClick={() => setSortKey('rating')}>Rating <span className="sort-arrow">▲</span></th>
-                <th onClick={() => setSortKey('rating_count')}>Reviews <span className="sort-arrow">▲</span></th>
-                <th>Primary genre</th>
-                <th>Sub-genre</th>
-                <th>Type</th>
-                <th>Series books</th>
-                <th>Audio score</th>
-                <th onClick={() => setSortKey('word_count')}>Word count <span className="sort-arrow">▲</span></th>
+                <FilterHeader label="Title" filterKey="title" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('title')} />
+                <FilterHeader label="Author" filterKey="author" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('author')} />
+                <FilterHeader label="Source" filterKey="source" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
+                <FilterHeader label="Rating" filterKey="rating" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('rating')} />
+                <FilterHeader label="Reviews" filterKey="reviews" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('rating_count')} />
+                <FilterHeader label="Tier" filterKey="tier" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('tier')} />
+                <FilterHeader label="Length" filterKey="length" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('length')} />
+                <FilterHeader label="MG Min" filterKey="mgMin" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
+                <FilterHeader label="MG Max" filterKey="mgMax" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
+                <FilterHeader label="Primary genre" filterKey="genre" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
+                <FilterHeader label="Sub-genre" filterKey="subGenre" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
+                <FilterHeader label="Type" filterKey="type" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
+                <FilterHeader label="Series books" filterKey="seriesBooks" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
+                <FilterHeader label="Audio score" filterKey="audioScore" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
+                <FilterHeader label="Word count" filterKey="wordCount" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('word_count')} />
                 <th>Synopsis</th>
-                <th>Author email</th>
+                <FilterHeader label="Author email" filterKey="email" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
               </tr>
             </thead>
             <tbody>
@@ -1553,7 +1736,11 @@ function MappingPage({
                   <td>{book.author}</td>
                   <td><span className={`tag ${sourceFor(book) === 'Amazon' ? 'tg-a' : 'tg-t'}`}>{sourceFor(book)}</span></td>
                   <td>{book.rating?.toFixed(1) || '-'}</td>
-                  <td>{fmtNumber(book.rating_count)}</td>
+                  <td>{fmtNumber(goodreadsReviewCount(book) || book.rating_count)}</td>
+                  <td><span className="tag tg-p">{tierProfile(book).tier}</span></td>
+                  <td>{bookLengthHours(book) ? `${bookLengthHours(book)}h` : '-'}</td>
+                  <td>{tierProfile(book).mgMin}</td>
+                  <td>{tierProfile(book).mgMax}</td>
                   <td>
                     <select className="tbl-select" value={book.genre || ''} onChange={(event) => patchBook(book.id, { genre: event.target.value })}>
                       <option value="">Unmapped</option>
@@ -1770,7 +1957,7 @@ function ExportPage({
   dataQuality: DataQualityReport | null;
 }) {
   const exportOptions = [
-    { label: 'Sample-compatible CSV', format: 'csv' as const, profile: 'sample_compatible', detail: 'Exact 49-column benchmark sheet contract' },
+    { label: 'Sample-compatible CSV', format: 'csv' as const, profile: 'sample_compatible', detail: 'Final sheet with tier, length, MG, and benchmark columns' },
     { label: 'Full diagnostic CSV', format: 'csv' as const, profile: 'full_diagnostic', detail: 'Includes provenance and data-quality columns' },
     { label: 'JSON diagnostic', format: 'json' as const, profile: 'full_diagnostic', detail: 'Structured rows for audit or automation' },
   ];
@@ -1820,13 +2007,17 @@ function ExportPage({
         </div>
         <div className="tbl-wrap">
           <table>
-            <thead><tr><th>#</th><th>Title</th><th>Author</th><th>Genre</th><th>Rating</th><th>Word count</th><th>Audio score</th><th>Type</th><th>Eval score</th></tr></thead>
+            <thead><tr><th>#</th><th>Title</th><th>Author</th><th>Tier</th><th>Length</th><th>MG Min</th><th>MG Max</th><th>Genre</th><th>Rating</th><th>Word count</th><th>Audio score</th><th>Type</th><th>Eval score</th></tr></thead>
             <tbody>
               {books.map((book, index) => (
                 <tr key={book.id}>
                   <td>{index + 1}</td>
                   <td><div className="cell-title">{book.title}</div><div className="cell-muted">{book.author}</div></td>
                   <td>{book.author}</td>
+                  <td><span className="tag tg-p">{tierProfile(book).tier}</span></td>
+                  <td>{bookLengthHours(book) ? `${bookLengthHours(book)}h` : '-'}</td>
+                  <td>{tierProfile(book).mgMin}</td>
+                  <td>{tierProfile(book).mgMax}</td>
                   <td><span className={`tag ${genreTagClass(book.genre)}`}>{book.genre || 'Unmapped'}</span></td>
                   <td>{book.rating?.toFixed(1) || '-'}</td>
                   <td>{fmtNumber(wordCount(book))}</td>
