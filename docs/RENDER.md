@@ -67,3 +67,22 @@ COMMISSIONING_JOB_WORKERS=2
 AMAZON_DETAIL_WORKERS=2
 GOODREADS_LOOKUP_WORKERS=2
 ```
+
+## Admin Diagnostics
+
+The app stores job progress in the database, so Render's live log view mainly shows HTTP access logs. To inspect recent batches and job events across anonymous workspaces, set this secret on the Render web service:
+
+```text
+COMMISSIONING_ADMIN_TOKEN=<long-random-secret>
+```
+
+Then call:
+
+```text
+GET /api/admin/batches
+GET /api/admin/jobs
+GET /api/admin/batches/{batch_id}/snapshot
+GET /api/admin/jobs/{job_id}/events
+```
+
+Pass the token as `X-Admin-Token` or `?admin_token=...`. Leave the token unset to keep these endpoints disabled.
