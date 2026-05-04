@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-import os
 import re
-import secrets
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
@@ -73,21 +71,6 @@ def get_workspace_id(
     return cleaned or DEFAULT_WORKSPACE_ID
 
 
-def require_admin_access(
-    x_admin_token: str | None = Header(default=None, alias="X-Admin-Token"),
-    admin_token: str | None = Query(default=None),
-) -> None:
-    expected = os.getenv("COMMISSIONING_ADMIN_TOKEN", "").strip()
-    if not expected:
-        raise HTTPException(
-            status_code=503,
-            detail="Admin diagnostics are disabled. Set COMMISSIONING_ADMIN_TOKEN to enable them.",
-        )
-    provided = (x_admin_token or admin_token or "").strip()
-    if not provided or not secrets.compare_digest(provided, expected):
-        raise HTTPException(status_code=403, detail="Invalid admin token")
-
-
 def _get_batch_or_404(db: Session, batch_id: int, workspace_id: str) -> Batch:
     batch = db.get(Batch, batch_id)
     if batch is None:
@@ -123,173 +106,9 @@ def _active_job_for_batch(db: Session, batch_id: int) -> Job | None:
     )
 
 
-def _job_payload(job: Job, db: Session, *, event_limit: int = 3) -> dict:
-    events = (
-        db.query(JobEvent)
-        .filter(JobEvent.job_id == job.id)
-        .order_by(JobEvent.id.desc())
-        .limit(max(0, event_limit))
-        .all()
-    )
-    return {
-        "id": job.id,
-        "batch_id": job.batch_id,
-        "workspace_id": job.batch.workspace_id if job.batch else "",
-        "batch_name": job.batch.name if job.batch else "",
-        "stage": job.stage,
-        "status": job.status,
-        "message": job.message,
-        "error": job.error,
-        "failure_bucket": job.failure_bucket,
-        "progress_current": job.progress_current,
-        "progress_total": job.progress_total,
-        "progress_percent": job.progress_percent,
-        "created_at": job.created_at,
-        "started_at": job.started_at,
-        "finished_at": job.finished_at,
-        "recent_events": [
-            {
-                "id": event.id,
-                "level": event.level,
-                "message": event.message,
-                "progress_percent": event.progress_percent,
-                "payload": event.payload_json,
-                "created_at": event.created_at,
-            }
-            for event in reversed(events)
-        ],
-    }
-
-
 @router.get("/health")
 def health() -> dict:
     return {"status": "ok"}
-
-
-@router.get("/admin/jobs")
-def admin_list_jobs(
-    limit: int = Query(default=25, ge=1, le=100),
-    event_limit: int = Query(default=3, ge=0, le=20),
-    _: None = Depends(require_admin_access),
-    db: Session = Depends(get_db),
-) -> dict:
-    jobs = db.query(Job).order_by(Job.created_at.desc()).limit(limit).all()
-    return {"jobs": [_job_payload(job, db, event_limit=event_limit) for job in jobs]}
-
-
-@router.get("/admin/jobs/{job_id}/events")
-def admin_job_events(
-    job_id: str,
-    limit: int = Query(default=200, ge=1, le=1000),
-    _: None = Depends(require_admin_access),
-    db: Session = Depends(get_db),
-) -> dict:
-    job = db.get(Job, job_id)
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-    events = (
-        db.query(JobEvent)
-        .filter(JobEvent.job_id == job_id)
-        .order_by(JobEvent.id.desc())
-        .limit(limit)
-        .all()
-    )
-    return {
-        "job": _job_payload(job, db, event_limit=0),
-        "events": [
-            {
-                "id": event.id,
-                "level": event.level,
-                "message": event.message,
-                "progress_percent": event.progress_percent,
-                "payload": event.payload_json,
-                "created_at": event.created_at,
-            }
-            for event in reversed(events)
-        ],
-    }
-
-
-@router.get("/admin/batches")
-def admin_list_batches(
-    limit: int = Query(default=25, ge=1, le=100),
-    _: None = Depends(require_admin_access),
-    db: Session = Depends(get_db),
-) -> dict:
-    batches = db.query(Batch).order_by(Batch.updated_at.desc(), Batch.id.desc()).limit(limit).all()
-    items = []
-    for batch in batches:
-        active_job = _active_job_for_batch(db, batch.id)
-        recent_job = db.query(Job).filter(Job.batch_id == batch.id).order_by(Job.created_at.desc()).first()
-        items.append(
-            {
-                "id": batch.id,
-                "workspace_id": batch.workspace_id,
-                "name": batch.name,
-                "genre": batch.genre,
-                "subgenre": batch.subgenre,
-                "status": batch.status,
-                "source_count": db.query(SourceLink).filter(SourceLink.batch_id == batch.id).count(),
-                "book_count": db.query(Book).filter(Book.batch_id == batch.id).count(),
-                "active_job": _job_payload(active_job, db, event_limit=1) if active_job else None,
-                "recent_job": _job_payload(recent_job, db, event_limit=1) if recent_job else None,
-                "created_at": batch.created_at,
-                "updated_at": batch.updated_at,
-            }
-        )
-    return {"batches": items}
-
-
-@router.get("/admin/batches/{batch_id}/snapshot")
-def admin_batch_snapshot(
-    batch_id: int,
-    _: None = Depends(require_admin_access),
-    db: Session = Depends(get_db),
-) -> dict:
-    batch = db.get(Batch, batch_id)
-    if batch is None:
-        raise HTTPException(status_code=404, detail="Batch not found")
-    sources = (
-        db.query(SourceLink)
-        .filter(SourceLink.batch_id == batch.id)
-        .order_by(SourceLink.id.asc())
-        .all()
-    )
-    jobs = db.query(Job).filter(Job.batch_id == batch.id).order_by(Job.created_at.desc()).limit(10).all()
-    books = db.query(Book).filter(Book.batch_id == batch.id).order_by(Book.id.asc()).limit(10).all()
-    return {
-        "batch": BatchRead.model_validate(batch),
-        "summary": batch_summary(db, batch),
-        "sources": [
-            {
-                "id": source.id,
-                "source_type": source.source_type,
-                "status": source.status,
-                "max_results": source.max_results,
-                "url": source.url,
-                "created_at": source.created_at,
-                "updated_at": source.updated_at,
-            }
-            for source in sources
-        ],
-        "jobs": [_job_payload(job, db, event_limit=5) for job in jobs],
-        "book_sample": [
-            {
-                "id": book.id,
-                "title": book.title,
-                "author": book.author,
-                "amazon_url": book.amazon_url,
-                "rating": book.rating,
-                "rating_count": book.rating_count,
-                "publisher": book.publisher,
-                "publication_date": book.publication_date,
-                "goodreads_rating": book.goodreads_rating,
-                "goodreads_rating_count": book.goodreads_rating_count,
-                "amazon_flags": ((book.provenance_json or {}).get("amazon", {}) or {}).get("amazon_quality_flags", []),
-            }
-            for book in books
-        ],
-    }
 
 
 @router.post("/bootstrap")

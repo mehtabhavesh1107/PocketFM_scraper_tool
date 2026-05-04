@@ -2,9 +2,8 @@ import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import './App.css';
 
-// Default to a same-origin relative path so any host that serves the UI (LAN IP, tunnel,
-// deployed domain) can reach the API through the dev-server / reverse proxy. Override with
-// VITE_API_BASE_URL only when the API lives on a separate origin.
+// Default to the Vite dev proxy. Override VITE_API_BASE_URL only when the API
+// runs on a different local origin.
 const API_BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api').replace(/\/$/, '');
 const WORKSPACE_KEY = 'pocketfm_workspace_id';
 

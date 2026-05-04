@@ -11,13 +11,11 @@ export default defineConfig({
     },
   },
   server: {
-    host: true,            // bind on 0.0.0.0 so LAN colleagues can hit it
-    // Permit temporary tunnel hostnames such as trycloudflare.com/ngrok for demos.
-    allowedHosts: true,
+    host: '127.0.0.1',
     port: 5173,
     strictPort: true,
     proxy: {
-      // forward all /api/* calls to the FastAPI backend so the UI and API share the same origin
+      // Forward /api/* calls to the local FastAPI backend during development.
       '/api': {
         target: 'http://127.0.0.1:8000',
         changeOrigin: true,

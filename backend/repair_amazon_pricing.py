@@ -60,7 +60,7 @@ async def repair_amazon_pricing():
         amazon_scraper = AmazonScraper()
         
         # Phase 1: Set US Location & CAPTCHA Gate
-        print("Spoofing Location to US (90016) to force USD rendering...")
+        print("Spoofing Location to US (90016) to force USD pricing...")
         page = await context.new_page()
         try:
             await page.goto("https://www.amazon.com/", wait_until="load", timeout=60000)

@@ -32,7 +32,7 @@ except Exception as exc:  # pragma: no cover - optional local integration
 def _require_sheet_handler() -> None:
     if read_sheet_as_df is None or batch_update_cells is None:
         logger.warning("Google Sheet sync unavailable: %s", _SHEET_HANDLER_IMPORT_ERROR)
-        raise RuntimeError("Google Sheet sync is unavailable in this deployment because sheets_handler is not packaged.")
+        raise RuntimeError("Google Sheet sync is unavailable because sheets_handler is not packaged.")
 
 
 def pull_from_sheet(db: Session, batch: Batch, sheet_url: str, worksheet_name: str) -> dict:

@@ -33,7 +33,7 @@ PAGE_DELAY_SECONDS = 0.5
 MAX_PAGES_PER_SOURCE = 100
 DEFAULT_RESULT_CEILING = 5000
 
-# Goodreads renders "4.35 avg rating" on /list/show pages and "avg rating 4.09" on shelves.
+# Goodreads shows "4.35 avg rating" on /list/show pages and "avg rating 4.09" on shelves.
 _RATING_RE = re.compile(r"(?:avg\s*rating[:\s]*)(\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)\s*avg\s*rating", re.IGNORECASE)
 _RATING_COUNT_RE = re.compile(r"([\d,]+)\s*ratings", re.IGNORECASE)
 

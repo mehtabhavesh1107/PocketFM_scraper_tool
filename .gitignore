@@ -33,7 +33,6 @@ goodreads_*.html
 .env
 .env.*
 !.env.example
-.vercel/
 
 # IDE
 .vscode/

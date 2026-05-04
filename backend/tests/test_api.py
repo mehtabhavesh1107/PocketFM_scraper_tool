@@ -21,7 +21,7 @@ os.environ["COMMISSIONING_DATABASE_URL"] = f"sqlite:///{(TEST_ROOT / 'backend_da
 
 from app import app
 from commissioning.db import SessionLocal, engine, init_db
-from commissioning.models import Base, Batch, Book, Contact, Job, JobEvent, SourceLink
+from commissioning.models import Base, Batch, Book, Contact
 from commissioning.services.discovery_service import discover_amazon_books
 from commissioning.services.amazon_http import discover_amazon_items
 
@@ -125,7 +125,7 @@ class CommissioningApiTests(unittest.TestCase):
 
         asyncio.run(run())
 
-    def test_missing_batch_is_auto_created_for_cloud_storage_recovery(self):
+    def test_missing_batch_is_auto_created_for_local_state_recovery(self):
         async def run():
             sources = await self._request("GET", "/api/batches/987/sources")
             self.assertEqual(sources.status_code, 200)
@@ -178,48 +178,6 @@ class CommissioningApiTests(unittest.TestCase):
 
             blocked = await self._request("GET", f"/api/batches/{batch_a['id']}/sources", headers=workspace_b)
             self.assertEqual(blocked.status_code, 404)
-
-        import asyncio
-
-        asyncio.run(run())
-
-    def test_admin_diagnostics_are_token_protected_and_cross_workspace(self):
-        db = SessionLocal()
-        batch = Batch(name="Hosted Run", workspace_id="ws-private")
-        db.add(batch)
-        db.flush()
-        db.add(SourceLink(batch_id=batch.id, source_type="amazon", url="https://www.amazon.com/dp/B0TEST1234"))
-        db.add(Book(batch_id=batch.id, title="Cloud Book", author="Author One"))
-        job = Job(batch_id=batch.id, stage="fast_scrape", status="running", message="Fetching Amazon details")
-        db.add(job)
-        db.flush()
-        db.add(JobEvent(job_id=job.id, level="info", message="Fetched Amazon details 1/2000"))
-        db.commit()
-        batch_id = batch.id
-        job_id = job.id
-        db.close()
-
-        async def run():
-            with patch.dict(os.environ, {"COMMISSIONING_ADMIN_TOKEN": ""}, clear=False):
-                disabled = await self._request("GET", "/api/admin/batches")
-            self.assertEqual(disabled.status_code, 503)
-
-            with patch.dict(os.environ, {"COMMISSIONING_ADMIN_TOKEN": "secret"}, clear=False):
-                forbidden = await self._request("GET", "/api/admin/batches")
-                self.assertEqual(forbidden.status_code, 403)
-
-                batches = await self._request("GET", "/api/admin/batches", headers={"X-Admin-Token": "secret"})
-                self.assertEqual(batches.status_code, 200)
-                self.assertEqual(batches.json()["batches"][0]["workspace_id"], "ws-private")
-
-                snapshot = await self._request("GET", f"/api/admin/batches/{batch_id}/snapshot?admin_token=secret")
-                self.assertEqual(snapshot.status_code, 200)
-                self.assertEqual(snapshot.json()["summary"]["total_books"], 1)
-                self.assertEqual(snapshot.json()["jobs"][0]["id"], job_id)
-
-                events = await self._request("GET", f"/api/admin/jobs/{job_id}/events", headers={"X-Admin-Token": "secret"})
-                self.assertEqual(events.status_code, 200)
-                self.assertEqual(events.json()["events"][0]["message"], "Fetched Amazon details 1/2000")
 
         import asyncio
 

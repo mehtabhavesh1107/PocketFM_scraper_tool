@@ -344,7 +344,7 @@ class AmazonScraper:
         try:
             # domcontentloaded is fast and sufficient — detail elements are in DOM immediately
             await page.goto(url, wait_until="domcontentloaded", timeout=60000)
-            # Give lazy sections 2s to render without waiting for full networkidle
+            # Give lazy sections 2s to load without waiting for full networkidle
             await asyncio.sleep(2)
 
             # --- Description ---
@@ -1343,7 +1343,7 @@ class AuthorScraper:
                 details["Website"] = website_url
                 # Step 2: Scrape the website for socials and contact
                 await page.goto(website_url, wait_until="domcontentloaded", timeout=45000)
-                await asyncio.sleep(2) # JS Render
+                await asyncio.sleep(2) # JS update
                 
                 content = await page.content()
                 

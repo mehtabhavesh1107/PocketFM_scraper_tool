@@ -1,15 +1,13 @@
 # Pocket FM Commissioning Tool
 
-A full-stack commissioning workflow for discovering, enriching, evaluating, and exporting title candidates for Pocket FM.
+A local commissioning workflow for discovering, enriching, evaluating, and exporting title candidates for Pocket FM.
 
-The app is now set up as one clean Vite + FastAPI project:
+The project is split into two local apps:
 
-- `frontend/`: React + Vite dashboard.
 - `backend/`: FastAPI API, background jobs, SQLAlchemy persistence, Amazon/Goodreads/contact enrichment, exports, and optional Google Sheets sync.
-- `Dockerfile`: production full-stack image that builds the UI and serves it from FastAPI.
-- `render.yaml`: Render Blueprint for the full app plus Postgres.
+- `frontend/`: React + Vite dashboard that calls the backend through the local Vite `/api` proxy.
 
-## Local Development
+## Local Setup
 
 Install dependencies:
 
@@ -19,67 +17,63 @@ npm --prefix frontend install
 py -m pip install -r backend/requirements.txt
 ```
 
-Run the UI and backend together:
+Run both apps together:
 
 ```text
 npm run dev
 ```
 
-Open:
+Open the UI:
 
 ```text
 http://127.0.0.1:5173
 ```
 
-The Vite dev server proxies `/api` to FastAPI on port `8000`.
-
-## Production-Style Local Run
-
-```text
-npm run serve
-```
-
-This builds `frontend/dist` and starts FastAPI at:
+The frontend proxies `/api` requests to FastAPI at:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-FastAPI serves both:
+## Separate Runs
 
-- UI: `/`
-- API: `/api`
-- Health check: `/api/health`
-
-## Render Deployment
-
-Use the Blueprint in `render.yaml`.
+Backend only:
 
 ```text
-services:
-pocketfm-scraper-tool  # Docker web service
-databases:
-pocketfm-scraper-db    # Postgres
+npm run dev:backend
 ```
 
-Render builds the frontend inside Docker, installs backend dependencies, installs Chromium for Playwright, and runs:
+Frontend only:
 
 ```text
-uvicorn app:app --host 0.0.0.0 --port $PORT
+npm run dev:frontend
 ```
 
-See [docs/RENDER.md](docs/RENDER.md) for the exact setup notes.
+## Local Data
+
+By default, the backend uses SQLite under:
+
+```text
+backend/backend_data/
+```
+
+Generated CSV/XLSX/JSON/PDF exports are written under:
+
+```text
+backend/generated/
+```
+
+Both folders are local working data and are ignored by git.
 
 ## Environment Variables
 
-The main optional values are:
+Copy `.env.example` only when you need to override local defaults. The most common options are:
 
 ```text
-COMMISSIONING_DATABASE_URL=postgresql://USER:PASSWORD@HOST:PORT/DATABASE
-COMMISSIONING_ALLOWED_ORIGINS=*
-COMMISSIONING_JOB_WORKERS=1
-AMAZON_DETAIL_WORKERS=1
-GOODREADS_LOOKUP_WORKERS=1
+VITE_API_BASE_URL=/api
+COMMISSIONING_JOB_WORKERS=4
+AMAZON_DETAIL_WORKERS=4
+GOODREADS_LOOKUP_WORKERS=4
 ```
 
 Google Sheets sync is optional and depends on local Google credentials / sheet access.
@@ -92,4 +86,4 @@ Run:
 npm run check
 ```
 
-That runs the backend test suite and the Vite production build.
+That runs the backend test suite and verifies the frontend build.
