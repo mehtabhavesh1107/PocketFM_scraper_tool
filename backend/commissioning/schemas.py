@@ -256,6 +256,14 @@ class BookRead(BaseModel):
     total_pages_in_series: str = ""
     total_word_count: str = ""
     total_hours: str = ""
+    tier: str = ""
+    gr_ratings: str = ""
+    trope: str = ""
+    length: str = ""
+    mg_min: str = ""
+    mg_max: str = ""
+    rev_share_min: str = ""
+    rev_share_max: str = ""
     goodread_link: str = ""
     series_book_1: str = ""
     series_link: str = ""
@@ -301,6 +309,14 @@ class BookPatch(BaseModel):
     word_count: int | None = None
     audio_score: int | None = None
     book_type: str | None = None
+    tier: str | None = None
+    gr_ratings: str | None = None
+    trope: str | None = None
+    length: str | None = None
+    mg_min: str | None = None
+    mg_max: str | None = None
+    rev_share_min: str | None = None
+    rev_share_max: str | None = None
     shortlisted: bool | None = None
     benchmark_match: bool | None = None
 
@@ -323,6 +339,11 @@ class BenchmarkRequest(BaseModel):
 class BenchmarkResponse(BaseModel):
     total: int
     matched_ids: list[int]
+
+
+class TierMappingResponse(BaseModel):
+    total: int
+    tier_counts: dict[str, int]
 
 
 class OutreachPatch(BaseModel):

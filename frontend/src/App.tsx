@@ -8,7 +8,7 @@ import './App.css';
 const API_BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api').replace(/\/$/, '');
 const WORKSPACE_KEY = 'pocketfm_workspace_id';
 
-type PageId = 'dashboard' | 'scrapping' | 'mapping' | 'benchmark' | 'outreach' | 'export';
+type PageId = 'dashboard' | 'scrapping' | 'mapping' | 'tier' | 'benchmark' | 'outreach' | 'export';
 type SourceType = 'amazon' | 'goodreads' | 'shared';
 type JobKind = 'scrape' | 'scrape-fast' | 'enrich-goodreads' | 'enrich-contacts';
 
@@ -100,6 +100,14 @@ interface Book {
   total_pages_in_series?: string;
   total_word_count?: string;
   total_hours?: string;
+  tier?: string;
+  gr_ratings?: string;
+  trope?: string;
+  length?: string;
+  mg_min?: string;
+  mg_max?: string;
+  rev_share_min?: string;
+  rev_share_max?: string;
   goodread_link?: string;
   series_book_1?: string;
   series_link?: string;
@@ -268,6 +276,7 @@ const pageLabels: Record<PageId, string> = {
   dashboard: 'Dashboard',
   scrapping: 'Scraping',
   mapping: 'Data & Genre Mapping',
+  tier: 'Tier Mapping',
   benchmark: 'Benchmark Filters',
   outreach: 'Author Outreach',
   export: 'Export & Share',
@@ -415,36 +424,36 @@ function parseMetric(value?: string | number | null): number {
 }
 
 function bookLengthHours(book: Book): number {
-  const explicitHours = parseMetric(book.total_hours);
+  const explicitHours = parseMetric(book.length) || parseMetric(book.total_hours);
   if (explicitHours) return Math.round(explicitHours);
   const words = wordCount(book);
   return words ? Math.max(1, Math.round(words / 10000)) : 0;
 }
 
 function goodreadsReviewCount(book: Book): number {
-  return parseMetric(book.goodreads_rating_count) || book.rating_count || 0;
+  return parseMetric(book.gr_ratings) || parseMetric(book.goodreads_rating_count);
 }
 
 function tierProfile(book: Book): TierProfile {
   const length = bookLengthHours(book);
   const grRatings = goodreadsReviewCount(book);
-  let tier = 'Tier 5';
-  let mgMin = 'No MG';
-  let mgMax = 'No MG';
+  let tier = book.tier || 'Tier 5';
+  let mgMin = book.mg_min || 'No MG';
+  let mgMax = book.mg_max || 'No MG';
 
-  if (grRatings >= 20000 && length >= 80) {
+  if (!book.tier && grRatings >= 20000 && length >= 80) {
     tier = 'Tier 1';
     mgMin = '10k';
     mgMax = '15k';
-  } else if (grRatings >= 20000 && length >= 50) {
+  } else if (!book.tier && grRatings >= 20000 && length >= 50) {
     tier = 'Tier 2';
     mgMin = '10k';
     mgMax = '12.5k';
-  } else if (grRatings >= 5000 && length >= 80) {
+  } else if (!book.tier && grRatings >= 5000 && length >= 80) {
     tier = 'Tier 3';
     mgMin = '7.5k';
     mgMax = '10k';
-  } else if (grRatings >= 5000 && length >= 50) {
+  } else if (!book.tier && grRatings >= 5000 && length >= 50) {
     tier = 'Tier 4';
     mgMin = '3k';
     mgMax = '5k';
@@ -453,12 +462,12 @@ function tierProfile(book: Book): TierProfile {
   return {
     tier,
     grRatings,
-    trope: 'Needgap',
+    trope: book.trope || 'Needgap',
     length,
     mgMin,
     mgMax,
-    revShareMin: '13%',
-    revShareMax: '18%',
+    revShareMin: book.rev_share_min || '13%',
+    revShareMax: book.rev_share_max || '18%',
   };
 }
 
@@ -469,7 +478,7 @@ function mappingFilterValue(book: Book, key: MappingFilterKey): string {
     author: book.author || '-',
     source: sourceFor(book),
     rating: book.rating ? book.rating.toFixed(1) : '-',
-    reviews: fmtNumber(goodreadsReviewCount(book) || book.rating_count),
+    reviews: fmtNumber(goodreadsReviewCount(book)),
     tier: profile.tier,
     length: profile.length ? String(profile.length) : '-',
     mgMin: profile.mgMin,
@@ -850,6 +859,23 @@ function App() {
     }
   }
 
+  async function applyTierMapping() {
+    if (!batch) return;
+    setError('');
+    try {
+      const result = await api<{ total: number; tier_counts: Record<string, number> }>(`/batches/${batch.id}/tier-mapping/apply`, {
+        method: 'POST',
+      });
+      await Promise.all([loadBooks(batch.id), loadSummary(batch.id), loadDataQuality(batch.id)]);
+      const counts = Object.entries(result.tier_counts)
+        .map(([tier, count]) => `${tier}: ${count}`)
+        .join(', ');
+      setNotice(`Tier mapping applied to ${result.total} books${counts ? ` (${counts})` : ''}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not apply tier mapping');
+    }
+  }
+
   async function saveEvaluation(book: Book, patch: Partial<Evaluation>) {
     const updated = await api<Book>(`/books/${book.id}/evaluation`, { method: 'PATCH', body: JSON.stringify(patch) });
     setBooks((prev) => prev.map((item) => (item.id === book.id ? updated : item)));
@@ -892,7 +918,7 @@ function App() {
     await saveOutreach('sent');
   }
 
-  async function createExport(format: 'csv' | 'xlsx' | 'pdf' | 'json', profile = 'sample_compatible') {
+  async function createExport(format: 'csv' | 'xlsx' | 'pdf' | 'json', profile = 'final_csv') {
     if (!batch) return;
     const record = await api<ExportRecord>(`/batches/${batch.id}/exports`, {
       method: 'POST',
@@ -952,6 +978,7 @@ function App() {
         if (sortKey === 'tier') return tierProfile(left).tier.localeCompare(tierProfile(right).tier);
         if (sortKey === 'length') return bookLengthHours(right) - bookLengthHours(left);
         if (sortKey === 'word_count') return wordCount(right) - wordCount(left);
+        if (sortKey === 'rating_count') return goodreadsReviewCount(right) - goodreadsReviewCount(left);
         return Number(right[sortKey] || 0) - Number(left[sortKey] || 0);
       });
   }, [books, search, genreFilter, columnFilters, sortKey]);
@@ -982,6 +1009,7 @@ function App() {
             <div className="sidebar-label">Pipeline</div>
             <NavItem page="scrapping" activePage={activePage} onClick={nav} icon="↗" label="Scraping" badge={summary?.total_sources || 0} />
             <NavItem page="mapping" activePage={activePage} onClick={nav} icon="▦" label="Data & Genre Mapping" badge={summary?.total_books || 0} />
+            <NavItem page="tier" activePage={activePage} onClick={nav} icon="▣" label="Tier Mapping" badge={books.filter((book) => book.tier).length} green />
             <NavItem page="benchmark" activePage={activePage} onClick={nav} icon="◎" label="Benchmark Filters" badge={summary?.shortlisted_books || 0} green />
           </div>
           <div className="sidebar-section">
@@ -1060,6 +1088,13 @@ function App() {
               nav={nav}
               runJob={runJob}
               jobRunning={jobRunning}
+            />
+          )}
+          {activePage === 'tier' && (
+            <TierMappingPage
+              books={books}
+              applyTierMapping={applyTierMapping}
+              nav={nav}
             />
           )}
           {activePage === 'benchmark' && (
@@ -1671,7 +1706,7 @@ function MappingPage({
     <section className="page active">
       <PageHead title="Data Cleaning & Genre Mapping" desc="Review scraped records, assign taxonomy, and verify audio adaptability scores.">
         <button className="btn btn-sm" onClick={() => runJob('enrich-goodreads')} disabled={jobRunning}>◎ Enrich Goodreads</button>
-        <button className="btn btn-primary btn-sm" onClick={() => nav('benchmark')}>Proceed to filters →</button>
+        <button className="btn btn-primary btn-sm" onClick={() => nav('tier')}>Proceed to Tier Mapping →</button>
       </PageHead>
 
       <div className="metrics">
@@ -1713,7 +1748,7 @@ function MappingPage({
                 <FilterHeader label="Author" filterKey="author" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('author')} />
                 <FilterHeader label="Source" filterKey="source" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
                 <FilterHeader label="Rating" filterKey="rating" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('rating')} />
-                <FilterHeader label="Reviews" filterKey="reviews" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('rating_count')} />
+                <FilterHeader label="GR Ratings" filterKey="reviews" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('rating_count')} />
                 <FilterHeader label="Tier" filterKey="tier" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('tier')} />
                 <FilterHeader label="Length" filterKey="length" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('length')} />
                 <FilterHeader label="MG Min" filterKey="mgMin" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
@@ -1736,7 +1771,7 @@ function MappingPage({
                   <td>{book.author}</td>
                   <td><span className={`tag ${sourceFor(book) === 'Amazon' ? 'tg-a' : 'tg-t'}`}>{sourceFor(book)}</span></td>
                   <td>{book.rating?.toFixed(1) || '-'}</td>
-                  <td>{fmtNumber(goodreadsReviewCount(book) || book.rating_count)}</td>
+                  <td>{fmtNumber(goodreadsReviewCount(book))}</td>
                   <td><span className="tag tg-p">{tierProfile(book).tier}</span></td>
                   <td>{bookLengthHours(book) ? `${bookLengthHours(book)}h` : '-'}</td>
                   <td>{tierProfile(book).mgMin}</td>
@@ -1767,6 +1802,133 @@ function MappingPage({
 
       <div className="action-row">
         <button className="btn" onClick={() => nav('scrapping')}>← Back to scraping</button>
+        <div className="spacer" />
+        <button className="btn btn-primary" onClick={() => nav('tier')}>Next: Tier Mapping →</button>
+      </div>
+    </section>
+  );
+}
+
+function TierMappingPage({
+  books,
+  applyTierMapping,
+  nav,
+}: {
+  books: Book[];
+  applyTierMapping: () => void;
+  nav: (page: PageId) => void;
+}) {
+  const [filters, setFilters] = useState<Partial<Record<MappingFilterKey, string>>>({});
+  const mappedCount = books.filter((book) => book.tier).length;
+  const goodreadsCount = books.filter((book) => goodreadsReviewCount(book) > 0).length;
+  const highTierCount = books.filter((book) => ['Tier 1', 'Tier 2'].includes(tierProfile(book).tier)).length;
+  const tierCounts = useMemo(() => {
+    const counts: Record<string, number> = { 'Tier 1': 0, 'Tier 2': 0, 'Tier 3': 0, 'Tier 4': 0, 'Tier 5': 0 };
+    books.forEach((book) => {
+      const tier = tierProfile(book).tier;
+      counts[tier] = (counts[tier] || 0) + 1;
+    });
+    return counts;
+  }, [books]);
+  const visibleBooks = useMemo(
+    () => books.filter((book) => (Object.entries(filters) as [MappingFilterKey, string][]).every(([key, value]) => !value || mappingFilterValue(book, key) === value)),
+    [books, filters],
+  );
+  const hasFilters = Object.values(filters).some(Boolean);
+
+  function setFilter(key: MappingFilterKey, value: string) {
+    setFilters((current) => {
+      const next = { ...current };
+      if (value) next[key] = value;
+      else delete next[key];
+      return next;
+    });
+  }
+
+  return (
+    <section className="page active">
+      <PageHead title="Tier Mapping" desc="Apply the final GR rating and length rules into the CSV columns after Goodreads enrichment is complete.">
+        <button className="btn btn-primary btn-sm" onClick={applyTierMapping} disabled={!books.length}>Apply Tier Mapping</button>
+        <button className="btn btn-sm" onClick={() => nav('export')}>Final CSV →</button>
+      </PageHead>
+
+      <div className="metrics">
+        <Metric icon="▤" value={String(books.length)} label="Books in batch" delta="Rows available" />
+        <Metric icon="◎" value={`${goodreadsCount}/${books.length || 0}`} label="GR ratings mapped" delta="Used for tier rules" />
+        <Metric icon="▣" value={String(mappedCount)} label="Rows stamped" delta={`${Math.max(books.length - mappedCount, 0)} pending`} />
+        <Metric icon="◆" value={String(highTierCount)} label="Tier 1-2" delta="Highest MG bands" />
+      </div>
+
+      <div className="card">
+        <div className="card-title">Tier rule set <span className="tag tg-t card-tag">Needgap</span></div>
+        <div className="field-grid">
+          <span className="field-chip on">Tier 1 · GR 20,000+ · Length 80+ · MG 10k-15k</span>
+          <span className="field-chip on">Tier 2 · GR 20,000+ · Length 50+ · MG 10k-12.5k</span>
+          <span className="field-chip on">Tier 3 · GR 5,000+ · Length 80+ · MG 7.5k-10k</span>
+          <span className="field-chip on">Tier 4 · GR 5,000+ · Length 50+ · MG 3k-5k</span>
+          <span className="field-chip on">Tier 5 · Otherwise · No MG</span>
+        </div>
+        <div className="quality-chips">
+          {Object.entries(tierCounts).map(([tier, count]) => (
+            <span key={tier} className="quality-chip">{tier}: {count}</span>
+          ))}
+        </div>
+      </div>
+
+      <div className="toolbar">
+        {hasFilters && <button className="btn btn-sm" onClick={() => setFilters({})}>Clear column filters</button>}
+        <div className="spacer" />
+        <span className="cell-muted">{visibleBooks.length} visible rows</span>
+      </div>
+
+      <div className="card table-card">
+        <div className="table-head">
+          <span>Final CSV tier columns</span>
+          <span className="tag tg-p">{mappedCount === books.length && books.length ? 'Applied' : 'Preview'}</span>
+        </div>
+        <div className="tbl-wrap">
+          <table>
+            <thead>
+              <tr>
+                <FilterHeader label="Title" filterKey="title" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Author" filterKey="author" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="GR Ratings" filterKey="reviews" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Length" filterKey="length" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Tier" filterKey="tier" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="MG Min" filterKey="mgMin" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="MG Max" filterKey="mgMax" books={books} filters={filters} onFilter={setFilter} />
+                <th>Trope</th>
+                <th>Rev Min</th>
+                <th>Rev Max</th>
+                <th>Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {visibleBooks.map((book) => {
+                const profile = tierProfile(book);
+                return (
+                  <tr key={book.id}>
+                    <td><div className="cell-title" title={book.title}>{book.title}</div></td>
+                    <td>{book.author || '-'}</td>
+                    <td>{fmtNumber(profile.grRatings)}</td>
+                    <td>{profile.length ? `${profile.length}h` : '-'}</td>
+                    <td><span className="tag tg-p">{profile.tier}</span></td>
+                    <td>{profile.mgMin}</td>
+                    <td>{profile.mgMax}</td>
+                    <td>{profile.trope}</td>
+                    <td>{profile.revShareMin}</td>
+                    <td>{profile.revShareMax}</td>
+                    <td><span className={`tag ${book.tier ? 'tg-t' : 'tg-g'}`}>{book.tier ? 'Applied' : 'Preview'}</span></td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="action-row">
+        <button className="btn" onClick={() => nav('mapping')}>← Back to mapping</button>
         <div className="spacer" />
         <button className="btn btn-primary" onClick={() => nav('benchmark')}>Next: Benchmark Filters →</button>
       </div>
@@ -1864,7 +2026,7 @@ function BenchmarkPage({
       </div>
 
       <div className="action-row">
-        <button className="btn" onClick={() => nav('mapping')}>← Back to mapping</button>
+        <button className="btn" onClick={() => nav('tier')}>← Back to tier mapping</button>
         <div className="spacer" />
         <button className="btn btn-primary" onClick={() => nav('outreach')}>Next: Author Outreach →</button>
       </div>
@@ -1957,7 +2119,7 @@ function ExportPage({
   dataQuality: DataQualityReport | null;
 }) {
   const exportOptions = [
-    { label: 'Sample-compatible CSV', format: 'csv' as const, profile: 'sample_compatible', detail: 'Final sheet with tier, length, MG, and benchmark columns' },
+    { label: 'Final CSV', format: 'csv' as const, profile: 'final_csv', detail: 'Final sheet with tier, length, MG, and benchmark columns' },
     { label: 'Full diagnostic CSV', format: 'csv' as const, profile: 'full_diagnostic', detail: 'Includes provenance and data-quality columns' },
     { label: 'JSON diagnostic', format: 'json' as const, profile: 'full_diagnostic', detail: 'Structured rows for audit or automation' },
   ];

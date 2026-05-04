@@ -213,7 +213,11 @@ class CommissioningApiTests(unittest.TestCase):
             genre="Thriller",
             rating=4.5,
             rating_count=15000,
+            goodreads_rating_count="25000",
             word_count=90000,
+            total_pages_in_series="3400",
+            total_word_count="850000",
+            total_hours="85",
             audio_score=85,
             book_type="Series",
         )
@@ -244,6 +248,17 @@ class CommissioningApiTests(unittest.TestCase):
             )
             self.assertEqual(benchmark.status_code, 200)
             self.assertEqual(benchmark.json()["total"], 1)
+
+            tier = await self._request("POST", f"/api/batches/{batch_id}/tier-mapping/apply")
+            self.assertEqual(tier.status_code, 200)
+            self.assertEqual(tier.json()["tier_counts"]["Tier 1"], 1)
+
+            refreshed = await self._request("GET", f"/api/batches/{batch_id}/books")
+            row = refreshed.json()["items"][0]
+            self.assertEqual(row["tier"], "Tier 1")
+            self.assertEqual(row["length"], "85")
+            self.assertEqual(row["mg_min"], "10k")
+            self.assertEqual(row["mg_max"], "15k")
 
             export = await self._request(
                 "POST",

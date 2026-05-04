@@ -138,7 +138,7 @@ DIAGNOSTIC_EXPORT_COLUMNS = [
 
 def export_columns_for_profile(profile: str = "sample") -> list[str]:
     normalized = (profile or "sample").lower().replace("-", "_")
-    if normalized in {"sample", "sample_compatible", "sample_csv"}:
+    if normalized in {"sample", "sample_compatible", "sample_csv", "final", "final_csv"}:
         return list(SAMPLE_COMPATIBLE_COLUMNS)
     if normalized in {"full", "diagnostic", "full_diagnostic"}:
         columns = list(SAMPLE_COMPATIBLE_COLUMNS)
@@ -355,10 +355,25 @@ def _apply_diagnostic_columns(row: dict, book: Book, quality_row: dict | None) -
         _set(row, column, value)
 
 
+def _tier_profile_for_export(book: Book) -> dict[str, str]:
+    derived = commissioning_tier_profile(book)
+    persisted = {
+        "Tier": book.tier,
+        "GR Ratings": book.gr_ratings,
+        "Trope": book.trope,
+        "Length": book.length,
+        "MG (Min)": book.mg_min,
+        "MG (Max)": book.mg_max,
+        "Rev share (min)": book.rev_share_min,
+        "Rev Share (max)": book.rev_share_max,
+    }
+    return {column: _clean_export_text(value) or derived[column] for column, value in persisted.items()}
+
+
 def flatten_book(book: Book, columns: list[str] | None = None) -> dict:
     row = {column: "" for column in (columns or get_reference_columns())}
     amazon_payload = _amazon_payload(book)
-    tier_profile = commissioning_tier_profile(book)
+    tier_profile = _tier_profile_for_export(book)
     rating_value = book.rating
     rating_count_value = book.rating_count
     customer_reviews = _filled(amazon_payload.get("customer_reviews"), "")

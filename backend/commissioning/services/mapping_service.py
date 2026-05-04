@@ -153,9 +153,7 @@ def commissioning_tier_profile(book: Book) -> dict[str, str]:
     post-Goodreads final sheet; Amazon review count is used only as a fallback.
     """
     hours = _derived_hours(book)
-    reviews = _parse_int(book.goodreads_rating_count)
-    if reviews is None:
-        reviews = book.rating_count or 0
+    reviews = _parse_int(book.goodreads_rating_count) or 0
     hours_value = hours or 0
 
     if reviews >= 20_000 and hours_value >= 80:
@@ -179,6 +177,22 @@ def commissioning_tier_profile(book: Book) -> dict[str, str]:
         "Rev share (min)": DEFAULT_REV_SHARE_MIN,
         "Rev Share (max)": DEFAULT_REV_SHARE_MAX,
     }
+
+
+def apply_tier_mapping(book: Book) -> dict[str, str]:
+    """Persist the final Pocket FM tier and MG columns onto a book row."""
+    if _derived_hours(book) is None:
+        apply_metric_mapping(book)
+    profile = commissioning_tier_profile(book)
+    book.tier = profile["Tier"]
+    book.gr_ratings = profile["GR Ratings"]
+    book.trope = profile["Trope"]
+    book.length = profile["Length"]
+    book.mg_min = profile["MG (Min)"]
+    book.mg_max = profile["MG (Max)"]
+    book.rev_share_min = profile["Rev share (min)"]
+    book.rev_share_max = profile["Rev Share (max)"]
+    return profile
 
 
 def _book_type(book: Book) -> str:

@@ -6,7 +6,7 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from ..models import Batch, Book, Contact, Evaluation, Job, OutreachMessage
-from .mapping_service import apply_benchmark_mapping
+from .mapping_service import apply_benchmark_mapping, apply_tier_mapping
 
 OUTREACH_TEMPLATES = {
     "formal": (
@@ -133,6 +133,17 @@ def apply_benchmark(db: Session, batch_id: int, filters: dict) -> list[int]:
         book.shortlisted = book.id in matched_ids
     db.commit()
     return sorted(matched_ids)
+
+
+def apply_tier_mapping_to_batch(db: Session, batch_id: int) -> dict:
+    books = db.query(Book).filter(Book.batch_id == batch_id).order_by(Book.id.asc()).all()
+    tier_counts: dict[str, int] = {}
+    for book in books:
+        profile = apply_tier_mapping(book)
+        tier = profile["Tier"] or "Unmapped"
+        tier_counts[tier] = tier_counts.get(tier, 0) + 1
+    db.commit()
+    return {"total": len(books), "tier_counts": tier_counts}
 
 
 def get_outreach_items(db: Session, batch_id: int) -> list[Book]:

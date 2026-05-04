@@ -48,10 +48,25 @@ def init_db() -> None:
 
 def _ensure_runtime_columns() -> None:
     inspector = inspect(engine)
-    if "batches" not in inspector.get_table_names():
+    table_names = set(inspector.get_table_names())
+    if "batches" not in table_names:
         return
     batch_columns = {column["name"] for column in inspector.get_columns("batches")}
+    book_columns = {column["name"] for column in inspector.get_columns("books")} if "books" in table_names else set()
+    tier_columns = {
+        "tier": "VARCHAR(50)",
+        "gr_ratings": "VARCHAR(100)",
+        "trope": "VARCHAR(100)",
+        "length": "VARCHAR(100)",
+        "mg_min": "VARCHAR(50)",
+        "mg_max": "VARCHAR(50)",
+        "rev_share_min": "VARCHAR(50)",
+        "rev_share_max": "VARCHAR(50)",
+    }
     with engine.begin() as connection:
         if "workspace_id" not in batch_columns:
             connection.execute(text("ALTER TABLE batches ADD COLUMN workspace_id VARCHAR(100) DEFAULT 'public' NOT NULL"))
         connection.execute(text("CREATE INDEX IF NOT EXISTS ix_batches_workspace_id ON batches (workspace_id)"))
+        for column_name, column_type in tier_columns.items():
+            if "books" in table_names and column_name not in book_columns:
+                connection.execute(text(f"ALTER TABLE books ADD COLUMN {column_name} {column_type} DEFAULT '' NOT NULL"))

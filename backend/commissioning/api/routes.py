@@ -34,9 +34,11 @@ from ..schemas import (
     SheetSyncRequest,
     SourceLinkCreate,
     SourceLinkRead,
+    TierMappingResponse,
 )
 from ..services.curation_service import (
     apply_benchmark,
+    apply_tier_mapping_to_batch,
     batch_summary,
     build_outreach_draft,
     get_outreach_items,
@@ -372,6 +374,12 @@ def benchmark_batch(batch_id: int, payload: BenchmarkRequest, workspace_id: str 
     batch = _get_batch_or_404(db, batch_id, workspace_id)
     matched_ids = apply_benchmark(db, batch.id, payload.model_dump())
     return {"total": len(matched_ids), "matched_ids": matched_ids}
+
+
+@router.post("/batches/{batch_id}/tier-mapping/apply", response_model=TierMappingResponse)
+def apply_tier_mapping_batch(batch_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
+    return apply_tier_mapping_to_batch(db, batch.id)
 
 
 @router.get("/batches/{batch_id}/outreach", response_model=list[BookRead])
