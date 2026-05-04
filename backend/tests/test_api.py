@@ -261,6 +261,52 @@ class CommissioningApiTests(unittest.TestCase):
 
         asyncio.run(run())
 
+    def test_accept_goodreads_candidate_updates_book(self):
+        db = SessionLocal()
+        batch = Batch(name="Goodreads Review")
+        db.add(batch)
+        db.flush()
+        book = Book(
+            batch_id=batch.id,
+            title="Review Candidate",
+            author="Jane Writer",
+            publisher="Pocket House",
+            publication_date="May 1, 2026",
+            print_length="320",
+            provenance_json={"amazon": {"isbn_10": "123456789X"}},
+        )
+        db.add(book)
+        db.commit()
+        book_id = book.id
+        db.close()
+
+        async def run():
+            with patch("commissioning.services.goodreads_service.GoodreadsScraper.fetch_book", side_effect=RuntimeError("offline")):
+                response = await self._request(
+                    "POST",
+                    f"/api/books/{book_id}/goodreads/accept",
+                    json={
+                        "url": "https://www.goodreads.com/book/show/123-review-candidate",
+                        "title": "Review Candidate",
+                        "author": "Jane Writer",
+                        "rating": "4.22",
+                        "rating_count": "4567",
+                        "pages": "320",
+                        "published_year": "2026",
+                        "publisher": "Pocket House",
+                        "score": 0.86,
+                    },
+                )
+            self.assertEqual(response.status_code, 200)
+            payload = response.json()
+            self.assertEqual(payload["goodreads_rating"], "4.22")
+            self.assertEqual(payload["goodreads_rating_count"], "4567")
+            self.assertEqual(payload["provenance_json"]["goodreads"]["Goodreads Match Status"], "accepted")
+
+        import asyncio
+
+        asyncio.run(run())
+
     def test_amazon_see_more_asins_expand_without_listing_fetch(self):
         url = "https://www.amazon.com/amz-books/seeMore/?asins=B0FKTTYMVG%2C0316569801"
 

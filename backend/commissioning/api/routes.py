@@ -24,6 +24,7 @@ from ..schemas import (
     EvaluationPatch,
     ExportRead,
     ExportRequest,
+    GoodreadsCandidateAccept,
     JobCreateResponse,
     JobRead,
     OutreachDraftRequest,
@@ -46,6 +47,8 @@ from ..services.curation_service import (
 )
 from ..services.data_quality_service import batch_data_quality
 from ..services.export_service import generate_export
+from ..services.goodreads_service import candidate_updates_for_book
+from ..services.mapping_service import apply_benchmark_mapping, apply_metric_mapping
 from ..services.batch_service import DEFAULT_BATCH_NAME, DEFAULT_WORKSPACE_ID, ensure_working_batch
 from ..services.reference_schema import reference_column_fields
 from ..services.schema_service import create_schema
@@ -399,6 +402,37 @@ def update_evaluation(book_id: int, payload: EvaluationPatch, workspace_id: str 
 def create_outreach_draft(book_id: int, payload: OutreachDraftRequest, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     book = _get_book_or_404(db, book_id, workspace_id)
     build_outreach_draft(db, book, payload.template, payload.sender_name, payload.sender_email)
+    db.refresh(book)
+    return BookRead.model_validate(book)
+
+
+@router.post("/books/{book_id}/goodreads/accept", response_model=BookRead)
+def accept_goodreads_candidate(book_id: int, payload: GoodreadsCandidateAccept, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    book = _get_book_or_404(db, book_id, workspace_id)
+    updates = candidate_updates_for_book(book, payload.model_dump())
+    book.goodread_link = updates.get("Resolved Goodreads Book") or updates.get("Series Book 1") or book.goodread_link
+    book.series_book_1 = updates.get("Series Book 1", book.series_book_1)
+    book.series_link = updates.get("Series Link", book.series_link)
+    book.primary_book_count = str(updates.get("# of primary book", book.primary_book_count) or "")
+    book.total_pages_in_series = str(updates.get("# of total pages in series", book.total_pages_in_series) or "")
+    book.gr_book_1_rating = str(updates.get("GR Book 1 Rating", book.gr_book_1_rating) or "")
+    book.gr_book_2_rating = str(updates.get("GR Book 2 Rating", book.gr_book_2_rating) or "")
+    book.gr_book_3_rating = str(updates.get("GR Book 3 Rating", book.gr_book_3_rating) or "")
+    book.gr_book_4_rating = str(updates.get("GR Book 4 Rating", book.gr_book_4_rating) or "")
+    book.gr_book_5_rating = str(updates.get("GR Book 5 Rating", book.gr_book_5_rating) or "")
+    book.gr_book_6_rating = str(updates.get("GR Book 6 Rating", book.gr_book_6_rating) or "")
+    book.gr_book_7_rating = str(updates.get("GR Book 7 Rating", book.gr_book_7_rating) or "")
+    book.gr_book_8_rating = str(updates.get("GR Book 8 Rating", book.gr_book_8_rating) or "")
+    book.gr_book_9_rating = str(updates.get("GR Book 9 Rating", book.gr_book_9_rating) or "")
+    book.gr_book_10_rating = str(updates.get("GR Book 1O Rating", book.gr_book_10_rating) or "")
+    book.goodreads_rating = str(updates.get("Goodreads rating", book.goodreads_rating) or "")
+    book.goodreads_rating_count = str(updates.get("Goodreads no of rating", book.goodreads_rating_count) or "")
+    provenance = dict(book.provenance_json or {})
+    provenance["goodreads"] = updates
+    book.provenance_json = provenance
+    apply_metric_mapping(book)
+    apply_benchmark_mapping(book)
+    db.commit()
     db.refresh(book)
     return BookRead.model_validate(book)
 

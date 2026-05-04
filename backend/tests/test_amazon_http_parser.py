@@ -162,6 +162,8 @@ class AmazonHttpParserTests(unittest.TestCase):
             </div>
             <div id="detailBullets_feature_div">
               <li><span class="a-list-item"><span class="a-text-bold">Publication date &rlm; : &lrm; </span>April 7, 2026</span></li>
+              <li><span class="a-list-item"><span class="a-text-bold">ISBN-10: </span>0316569801</span></li>
+              <li><span class="a-list-item"><span class="a-text-bold">ISBN-13: </span>978-0316569801</span></li>
             </div>
             """,
             "html.parser",
@@ -171,6 +173,8 @@ class AmazonHttpParserTests(unittest.TestCase):
 
         self.assertEqual(values["Publisher"], "Knopf")
         self.assertEqual(values["Publication date"], "April 7, 2026")
+        self.assertEqual(values["ISBN-10"], "0316569801")
+        self.assertEqual(values["ISBN-13"], "978-0316569801")
         self.assertEqual(clean_amazon_value("\u200f : \u200e Grand Central Publishing"), "Grand Central Publishing")
 
     def test_media_matrix_prefers_clean_format_labels(self):

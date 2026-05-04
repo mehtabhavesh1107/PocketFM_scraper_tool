@@ -318,6 +318,15 @@ input[type=range] { flex:1;accent-color:var(--p600);height:18px; }
 .quality-row small { display:block;font-size:11px;color:var(--g500);margin-top:2px; }
 .genre-source-row { display:flex;align-items:center;justify-content:space-between;border-bottom:0.5px solid #f1efe8;padding:7px 0;font-size:12px;color:var(--g600);text-transform:capitalize; }
 .quality-action { margin-top:10px; }
+.mini-title.spaced { margin-top:14px; }
+.gr-confidence { display:inline-flex;margin-top:8px; }
+.goodreads-review-queue { margin-top:16px;border-top:0.5px solid #f1efe8;padding-top:14px; }
+.goodreads-review-row { display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;border:0.5px solid #e0ddd4;border-radius:8px;padding:10px 12px;margin-top:8px;background:#fffdf8; }
+.goodreads-review-row strong,.goodreads-review-row small,.goodreads-review-row a { display:block;min-width:0; }
+.goodreads-review-row strong { font-size:12px;font-weight:600;color:#1a1a18;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.goodreads-review-row small { font-size:11px;color:var(--g500);margin-top:2px; }
+.goodreads-review-row a { color:var(--p600);font-size:11px;margin-top:4px;overflow-wrap:anywhere; }
+.review-actions { display:flex;align-items:center;gap:8px; }
 
 .audio-score { display:flex;align-items:center;gap:6px; }
 .audio-bar { width:50px;height:5px;background:var(--g100);border-radius:3px;overflow:hidden; }

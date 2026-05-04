@@ -135,10 +135,17 @@ def _goodreads_cache_key(book: Book) -> str:
 
 
 def _goodreads_row(book: Book) -> dict:
+    amazon = (book.provenance_json or {}).get("amazon", {})
+    amazon = amazon if isinstance(amazon, dict) else {}
     return {
         "Title": _clean_title_for_lookup(book.title),
         "Author": book.clean_author_names or book.author,
         "Genre": book.genre,
+        "Publisher": book.publisher,
+        "Publication date": book.publication_date,
+        "Print Length": book.print_length,
+        "ISBN-10": amazon.get("isbn_10", ""),
+        "ISBN-13": amazon.get("isbn_13", ""),
         "Book number": book.book_number,
         "Part of series": book.part_of_series,
         "Cleaned Series Name": book.cleaned_series_name,
@@ -200,6 +207,8 @@ def _upsert_book(session: Session, batch_id: int, record: dict, source_type: str
         "detail_fetched": bool(source_payload.get("detail_fetched")),
         "source_format": record.get("source_format") or source_payload.get("source_format", ""),
         "detail_format": record.get("detail_format") or source_payload.get("detail_format", ""),
+        "isbn_10": record.get("isbn_10") or source_payload.get("isbn_10", ""),
+        "isbn_13": record.get("isbn_13") or source_payload.get("isbn_13", ""),
         "best_sellers_rank_number": record.get("best_sellers_rank_number") or source_payload.get("best_sellers_rank_number", ""),
         "best_sellers_rank_text": record.get("best_sellers_rank_text") or source_payload.get("best_sellers_rank_text", ""),
         "customer_reviews": record.get("customer_reviews") or source_payload.get("customer_reviews", ""),
@@ -220,6 +229,8 @@ def _upsert_book(session: Session, batch_id: int, record: dict, source_type: str
                 "print_length",
                 "format",
                 "genre",
+                "isbn_10",
+                "isbn_13",
             )
             if key in record
         },
@@ -247,8 +258,17 @@ def _upsert_book(session: Session, batch_id: int, record: dict, source_type: str
 def _apply_goodreads_updates(book: Book, updates: dict) -> None:
     gr_count = _normalize_int(updates.get("Goodreads no of rating"))
     if gr_count is not None and gr_count <= 1 and (book.rating_count or 0) >= 1000:
-        updates = {"Goodread Link": updates.get("Goodread Link", book.goodread_link)}
-    book.goodread_link = updates.get("Goodread Link", book.goodread_link)
+        updates = {
+            key: value
+            for key, value in updates.items()
+            if key.startswith("Goodreads Match") or key in {"Goodreads Candidates", "Goodreads Search Attempts", "Goodreads ISBNs Used"}
+        } | {"Goodread Link": updates.get("Goodread Link", book.goodread_link)}
+    match_status = str(updates.get("Goodreads Match Status", "") or "").lower()
+    resolved_book_url = updates.get("Resolved Goodreads Book") or updates.get("Series Book 1")
+    if match_status in {"matched", "accepted"} and resolved_book_url:
+        book.goodread_link = resolved_book_url
+    else:
+        book.goodread_link = updates.get("Goodread Link", book.goodread_link)
     book.series_book_1 = updates.get("Series Book 1", book.series_book_1)
     book.series_link = updates.get("Series Link", book.series_link)
     book.primary_book_count = str(updates.get("# of primary book", book.primary_book_count) or "")
@@ -275,6 +295,8 @@ def _apply_goodreads_updates(book: Book, updates: dict) -> None:
 def _has_goodreads_match(updates: dict) -> bool:
     if not updates:
         return False
+    if str(updates.get("Goodreads Match Status", "") or "").lower() in {"matched", "accepted"}:
+        return True
     if any(
         _value_present(updates.get(key))
         for key in (

@@ -38,6 +38,33 @@ def _goodreads_payload(book: Book) -> dict:
     return payload if isinstance(payload, dict) else {}
 
 
+def _goodreads_match_status(book: Book) -> str:
+    payload = _goodreads_payload(book)
+    status = _clean(str(payload.get("Goodreads Match Status", ""))).lower()
+    if status:
+        return status
+    if value_present(book.goodreads_rating) and value_present(book.goodreads_rating_count):
+        return "matched"
+    candidates = payload.get("Goodreads Candidates")
+    if isinstance(candidates, list) and candidates:
+        return "review"
+    return "unmatched"
+
+
+def _goodreads_confidence(book: Book) -> float:
+    payload = _goodreads_payload(book)
+    try:
+        return float(payload.get("Goodreads Match Confidence") or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _goodreads_candidates(book: Book) -> list[dict]:
+    payload = _goodreads_payload(book)
+    candidates = payload.get("Goodreads Candidates")
+    return candidates if isinstance(candidates, list) else []
+
+
 def _source_category(book: Book) -> str:
     for payload in (book.provenance_json or {}).values():
         if not isinstance(payload, dict):
@@ -117,18 +144,26 @@ def batch_data_quality(db: Session, batch_id: int) -> dict:
         "synopsis": lambda book: book.synopsis,
         "goodreads_rating": lambda book: book.goodreads_rating,
         "goodreads_rating_count": lambda book: book.goodreads_rating_count,
+        "goodreads_match": lambda book: _goodreads_match_status(book) in {"matched", "accepted"},
         "contact": _contact_present,
         "genre": lambda book: book.genre,
         "sub_genre": lambda book: book.sub_genre,
     }
     coverage = {name: 0 for name in coverage_fields}
     genre_sources = Counter()
+    goodreads_statuses = Counter()
+    review_candidate_total = 0
 
     for book in books:
         issues: list[dict] = []
         missing_fields: list[str] = []
         amazon = _amazon_payload(book)
         goodreads = _goodreads_payload(book)
+        goodreads_status = _goodreads_match_status(book)
+        goodreads_confidence = _goodreads_confidence(book)
+        goodreads_candidates = _goodreads_candidates(book)
+        goodreads_statuses[goodreads_status] += 1
+        review_candidate_total += len(goodreads_candidates)
 
         for field, getter in coverage_fields.items():
             try:
@@ -162,6 +197,10 @@ def batch_data_quality(db: Session, batch_id: int) -> dict:
             missing_fields.append("Goodreads no of rating")
         if not _contact_present(book):
             issues.append(_issue("missing_contact", "warning", "No email, contact form, or Facebook link found yet.", "Contact"))
+        if goodreads_status == "review":
+            issues.append(_issue("goodreads_needs_review", "warning", "Goodreads has candidate matches that need review.", "Goodreads"))
+        elif goodreads_status == "unmatched" and not value_present(book.goodreads_rating):
+            issues.append(_issue("goodreads_unmatched", "warning", "No confident Goodreads match was found.", "Goodreads"))
         if key_counts[_book_key(book)] > 1:
             issues.append(_issue("duplicate_title_author", "critical", "Duplicate title/author appears in this batch.", "Title"))
         url = _clean(book.amazon_url or book.url)
@@ -200,6 +239,13 @@ def batch_data_quality(db: Session, batch_id: int) -> dict:
                 "detail_format": amazon.get("detail_format", ""),
                 "amazon_quality_flags": amazon.get("amazon_quality_flags") or [],
                 "goodreads_link": book.goodread_link or goodreads.get("Goodread Link", ""),
+                "goodreads_resolved_link": goodreads.get("Resolved Goodreads Book", ""),
+                "goodreads_match_status": goodreads_status,
+                "goodreads_match_confidence": goodreads_confidence,
+                "goodreads_match_reason": goodreads.get("Goodreads Match Reason", ""),
+                "goodreads_match_method": goodreads.get("Goodreads Match Method", ""),
+                "goodreads_candidates": goodreads_candidates,
+                "goodreads_isbns_used": goodreads.get("Goodreads ISBNs Used", []),
                 "contact_ready": _contact_present(book),
             }
         )
@@ -221,5 +267,15 @@ def batch_data_quality(db: Session, batch_id: int) -> dict:
         "missing": {field: total - count for field, count in coverage.items()},
         "issue_counts": dict(issue_counts),
         "genre_sources": dict(genre_sources),
+        "goodreads": {
+            "status_counts": dict(goodreads_statuses),
+            "review_candidate_count": review_candidate_total,
+            "average_confidence": round(
+                sum(_goodreads_confidence(book) for book in books) / total,
+                3,
+            )
+            if total
+            else 0,
+        },
         "rows": rows,
     }

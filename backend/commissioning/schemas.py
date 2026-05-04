@@ -340,6 +340,24 @@ class OutreachDraftRequest(BaseModel):
     sender_email: str = "astha.singh@pocketfm.com"
 
 
+class GoodreadsCandidateAccept(BaseModel):
+    url: str
+    title: str = ""
+    author: str = ""
+    series_name: str = ""
+    series_url: str = ""
+    rating: str = ""
+    rating_count: str = ""
+    pages: str = ""
+    published_year: str = ""
+    publication: str = ""
+    publisher: str = ""
+    isbn_10: str = ""
+    isbn_13: str = ""
+    score: float = 1
+    search_url: str = ""
+
+
 class ExportRequest(BaseModel):
     export_format: str = Field(default="csv")
     profile: str = Field(default="sample_compatible")

@@ -209,7 +209,34 @@ interface DataQualityRow {
   source_asin?: string;
   detail_asin?: string;
   detail_url?: string;
+  goodreads_link?: string;
+  goodreads_resolved_link?: string;
+  goodreads_match_status?: string;
+  goodreads_match_confidence?: number;
+  goodreads_match_reason?: string;
+  goodreads_match_method?: string;
+  goodreads_candidates?: GoodreadsCandidate[];
+  goodreads_isbns_used?: string[];
   contact_ready: boolean;
+}
+
+interface GoodreadsCandidate {
+  url: string;
+  title?: string;
+  author?: string;
+  series_name?: string;
+  series_url?: string;
+  rating?: string;
+  rating_count?: string;
+  pages?: string;
+  published_year?: string;
+  publication?: string;
+  publisher?: string;
+  isbn_10?: string;
+  isbn_13?: string;
+  score?: number;
+  match_method?: string;
+  evidence?: string[];
 }
 
 interface DataQualityReport {
@@ -221,6 +248,11 @@ interface DataQualityReport {
   missing: Record<string, number>;
   issue_counts: Record<string, number>;
   genre_sources: Record<string, number>;
+  goodreads?: {
+    status_counts: Record<string, number>;
+    review_candidate_count: number;
+    average_confidence: number;
+  };
   rows: DataQualityRow[];
 }
 
@@ -674,6 +706,21 @@ function App() {
     setBooks((prev) => prev.map((book) => (book.id === bookId ? updated : book)));
   }
 
+  async function acceptGoodreadsCandidate(bookId: number, candidate: GoodreadsCandidate) {
+    try {
+      const updated = await api<Book>(`/books/${bookId}/goodreads/accept`, {
+        method: 'POST',
+        body: JSON.stringify(candidate),
+      });
+      setBooks((prev) => prev.map((book) => (book.id === bookId ? updated : book)));
+      if (batch) await loadDataQuality(batch.id);
+      setNotice('Goodreads candidate accepted and row metrics refreshed.');
+      setError('');
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not accept Goodreads candidate');
+    }
+  }
+
   async function applyBenchmark(showNotice = true) {
     if (!batch) return;
     try {
@@ -853,6 +900,7 @@ function App() {
               metrics={metrics}
               genres={genres}
               dataQuality={dataQuality}
+              acceptGoodreadsCandidate={acceptGoodreadsCandidate}
               selectRun={selectRun}
               createNewRun={createNewRun}
               nav={nav}
@@ -1007,6 +1055,7 @@ function DashboardPage({
   metrics,
   genres,
   dataQuality,
+  acceptGoodreadsCandidate,
   selectRun,
   createNewRun,
   nav,
@@ -1019,6 +1068,7 @@ function DashboardPage({
   metrics: ReturnType<typeof AppMetrics>;
   genres: string[];
   dataQuality: DataQualityReport | null;
+  acceptGoodreadsCandidate: (bookId: number, candidate: GoodreadsCandidate) => void;
   selectRun: (batchId: number) => void;
   createNewRun: () => void;
   nav: (page: PageId) => void;
@@ -1106,7 +1156,7 @@ function DashboardPage({
         </div>
       </div>
 
-      <DataQualityPanel report={dataQuality} nav={nav} />
+      <DataQualityPanel report={dataQuality} nav={nav} acceptGoodreadsCandidate={acceptGoodreadsCandidate} />
 
       <div className="card">
         <div className="card-title">Quick actions</div>
@@ -1122,7 +1172,15 @@ function DashboardPage({
   );
 }
 
-function DataQualityPanel({ report, nav }: { report: DataQualityReport | null; nav: (page: PageId) => void }) {
+function DataQualityPanel({
+  report,
+  nav,
+  acceptGoodreadsCandidate,
+}: {
+  report: DataQualityReport | null;
+  nav: (page: PageId) => void;
+  acceptGoodreadsCandidate: (bookId: number, candidate: GoodreadsCandidate) => void;
+}) {
   if (!report || report.total === 0) {
     return (
       <div className="card">
@@ -1137,9 +1195,14 @@ function DataQualityPanel({ report, nav }: { report: DataQualityReport | null; n
     .sort((left, right) => right.critical_count - left.critical_count || right.warning_count - left.warning_count || left.quality_score - right.quality_score)
     .slice(0, 8);
   const genreSources = Object.entries(report.genre_sources || {}).sort(([, left], [, right]) => right - left);
+  const goodreadsStatuses = Object.entries(report.goodreads?.status_counts || {}).sort(([, left], [, right]) => right - left);
+  const reviewRows = report.rows
+    .filter((row) => (row.goodreads_candidates || []).length > 0 && row.goodreads_match_status !== 'matched' && row.goodreads_match_status !== 'accepted')
+    .slice(0, 4);
   const keyFields = [
     ['rank', 'best_sellers_rank'],
     ['Goodreads', 'goodreads_rating'],
+    ['GR match', 'goodreads_match'],
     ['publisher', 'publisher'],
     ['date', 'publication_date'],
     ['contact', 'contact'],
@@ -1176,7 +1239,15 @@ function DataQualityPanel({ report, nav }: { report: DataQualityReport | null; n
           ))}
         </div>
         <div>
-          <div className="mini-title">Genre source audit</div>
+          <div className="mini-title">Goodreads coverage</div>
+          {goodreadsStatuses.map(([status, count]) => (
+            <div className="genre-source-row" key={status}>
+              <span>{status.replace(/_/g, ' ')}</span>
+              <strong>{count}</strong>
+            </div>
+          ))}
+          <div className="quality-chip gr-confidence">Avg confidence: {Math.round((report.goodreads?.average_confidence || 0) * 100)}%</div>
+          <div className="mini-title spaced">Genre source audit</div>
           {genreSources.map(([source, count]) => (
             <div className="genre-source-row" key={source}>
               <span>{source.replace(/_/g, ' ')}</span>
@@ -1186,6 +1257,28 @@ function DataQualityPanel({ report, nav }: { report: DataQualityReport | null; n
           <button className="btn btn-sm quality-action" onClick={() => nav('mapping')}>Review rows</button>
         </div>
       </div>
+      {reviewRows.length > 0 && (
+        <div className="goodreads-review-queue">
+          <div className="mini-title">Goodreads review queue</div>
+          {reviewRows.map((row) => {
+            const candidate = row.goodreads_candidates?.[0];
+            if (!candidate) return null;
+            return (
+              <div className="goodreads-review-row" key={row.book_id}>
+                <div>
+                  <strong>{row.title}</strong>
+                  <small>{row.goodreads_match_reason || 'Review suggested Goodreads match'}</small>
+                  <a href={candidate.url} target="_blank" rel="noreferrer">{candidate.title || candidate.url}</a>
+                </div>
+                <div className="review-actions">
+                  <span className="tag tg-t">{Math.round((candidate.score || 0) * 100)}%</span>
+                  <button className="btn btn-xs" onClick={() => acceptGoodreadsCandidate(row.book_id, candidate)}>Accept</button>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

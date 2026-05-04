@@ -122,6 +122,8 @@ class AmazonDetail:
     series_name: str = ""
     book_number: str = ""
     series_total: str = ""
+    isbn_10: str = ""
+    isbn_13: str = ""
     rating: float | None = None
     rating_count: int | None = None
     best_sellers_rank: str = ""
@@ -843,6 +845,20 @@ def parse_key_values(soup: BeautifulSoup) -> dict[str, str]:
     return values
 
 
+def _clean_isbn(value: str) -> str:
+    return re.sub(r"[^0-9Xx]+", "", value or "").upper()
+
+
+def _isbn_from_values(values: dict[str, str], *labels: str) -> str:
+    normalized = {re.sub(r"[^a-z0-9]+", "", key.lower()): value for key, value in values.items()}
+    for label in labels:
+        key = re.sub(r"[^a-z0-9]+", "", label.lower())
+        isbn = _clean_isbn(normalized.get(key, ""))
+        if len(isbn) in {10, 13}:
+            return isbn
+    return ""
+
+
 def _clean_title(value: str) -> str:
     title = clean_amazon_value(value)
     title = re.sub(r"^\s*Amazon\.com:\s*", "", title, flags=re.IGNORECASE)
@@ -1158,6 +1174,8 @@ def _parse_amazon_detail_page(html: str, url: str) -> tuple[AmazonDetail, Beauti
     detail.format = _selected_format(soup, values)
     detail.synopsis = _parse_synopsis(soup)
     detail.series_name, detail.book_number, detail.series_total = _parse_series(values, detail.title)
+    detail.isbn_10 = _isbn_from_values(values, "ISBN-10", "ISBN 10")
+    detail.isbn_13 = _isbn_from_values(values, "ISBN-13", "ISBN 13")
     detail.best_sellers_rank = values.get("Best Sellers Rank", "")
     detail.best_sellers_rank_number = _rank_number(detail.best_sellers_rank)
     detail.genre = _genre_from_rank(detail.best_sellers_rank)
@@ -1189,6 +1207,8 @@ def _merge_detail(primary: AmazonDetail, fallback: AmazonDetail) -> AmazonDetail
         "series_name",
         "book_number",
         "series_total",
+        "isbn_10",
+        "isbn_13",
         "best_sellers_rank",
         "best_sellers_rank_number",
         "customer_reviews",
@@ -1302,6 +1322,8 @@ def to_record(item: AmazonItem, detail: AmazonDetail | None = None) -> dict:
         "part_of_series": detail.series_name if detail else "",
         "cleaned_series_name": detail.series_name if detail else "",
         "book_number": detail.book_number if detail else "",
+        "isbn_10": detail.isbn_10 if detail else "",
+        "isbn_13": detail.isbn_13 if detail else "",
         "series_flag": "Y" if detail and detail.series_name else ("N" if detail else ""),
         "source_asin": source_asin,
         "detail_asin": detail_asin,
@@ -1321,6 +1343,8 @@ def to_record(item: AmazonItem, detail: AmazonDetail | None = None) -> dict:
             "used_format_switch": bool(detail and detail.used_format_switch),
             "source_format": detail.source_format if detail else "",
             "detail_format": detail.detail_format if detail else "",
+            "isbn_10": detail.isbn_10 if detail else "",
+            "isbn_13": detail.isbn_13 if detail else "",
             "rank": item.rank,
             "best_sellers_rank_number": detail.best_sellers_rank_number if detail else "",
             "best_sellers_rank_text": best_rank_text,
