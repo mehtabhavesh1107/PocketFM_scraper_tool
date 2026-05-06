@@ -552,8 +552,8 @@ class GoodreadsScraper:
             )
 
         if rows:
-            details.book_ratings = [row["rating"] for row in rows[:10]]
-            details.book_rating_counts = [row["rating_count"] for row in rows[:10]]
+            details.book_ratings = [row["rating"] for row in rows]
+            details.book_rating_counts = [row["rating_count"] for row in rows]
             details.book1_url = rows[0]["url"]
             details.book1_rating = rows[0]["rating"]
             details.book1_rating_count = rows[0]["rating_count"]
@@ -786,22 +786,28 @@ class GoodreadsScraper:
         total_pages = series.total_pages or best.pages
         book1_url = series.book1_url or best.url
         book1_rating = series.book1_rating or best.rating
-        book_ratings = list(series.book_ratings[:10])
-        book_rating_counts = list(series.book_rating_counts[:10])
+        book_ratings = list(series.book_ratings)
+        book_rating_counts = list(series.book_rating_counts)
         if not book_ratings:
             book_ratings = [book1_rating]
         if not book_rating_counts:
             book_rating_counts = [goodreads_rating_count]
 
         extra = {}
-        for index in range(1, 11):
+        primary_book_count = first_int(primary_books) or 0
+        series_column_count = max(10, len(book_ratings), len(book_rating_counts), primary_book_count)
+        for index in range(1, series_column_count + 1):
             rating = book_ratings[index - 1] if len(book_ratings) >= index else ""
             rating_count = book_rating_counts[index - 1] if len(book_rating_counts) >= index else ""
             legacy_rating_key = "GR Book 1O Rating" if index == 10 else f"GR Book {index} Rating"
             extra[legacy_rating_key] = rating
+            if index == 10:
+                extra["GR Book 10 Rating"] = rating
             extra[f"Book {index} Ratings"] = rating
             extra[f"Book{index} No Of Rating"] = rating_count
             extra[f"Book {index} No Of Rating"] = rating_count
+        extra["Goodreads Series Ratings"] = book_ratings
+        extra["Goodreads Series Rating Counts"] = book_rating_counts
 
         reason_bits = list(dict.fromkeys(best.evidence))
         if not reason_bits and best.match_method:

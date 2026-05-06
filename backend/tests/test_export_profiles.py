@@ -100,6 +100,52 @@ class ExportProfileTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_final_profile_expands_goodreads_series_rating_columns(self):
+        db = SessionLocal()
+        try:
+            batch = Batch(name="Long Series Export")
+            db.add(batch)
+            db.flush()
+            db.add(
+                Book(
+                    batch_id=batch.id,
+                    title="Long Series Book",
+                    author="Jane Writer",
+                    primary_book_count="12",
+                    provenance_json={
+                        "goodreads": {
+                            "Goodreads Series Ratings": [
+                                "4.01",
+                                "4.02",
+                                "4.03",
+                                "4.04",
+                                "4.05",
+                                "4.06",
+                                "4.07",
+                                "4.08",
+                                "4.09",
+                                "4.10",
+                                "4.11",
+                                "4.12",
+                            ]
+                        }
+                    },
+                )
+            )
+            db.commit()
+
+            export = generate_export(db, batch, "csv", profile="final_csv")
+            with open(export.file_path, newline="", encoding="utf-8") as handle:
+                reader = csv.DictReader(handle)
+                row = next(reader)
+
+            self.assertIn("GR Book 11 Rating", reader.fieldnames or [])
+            self.assertIn("GR Book 12 Rating", reader.fieldnames or [])
+            self.assertEqual(row["GR Book 11 Rating"], "4.11")
+            self.assertEqual(row["GR Book 12 Rating"], "4.12")
+        finally:
+            db.close()
+
 
 if __name__ == "__main__":
     unittest.main()

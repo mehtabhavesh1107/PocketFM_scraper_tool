@@ -125,7 +125,7 @@ Column meanings:
 - `Goodreads rating`: Goodreads average star rating for the resolved Goodreads book.
 - `Goodreads no of rating`: Goodreads rating/review count for the resolved Goodreads book.
 - `GR Ratings`: the Goodreads rating/review count used by the tier mapping rules.
-- `GR Book 1 Rating` through `GR Book 10 Rating`: Goodreads average star ratings for books in the detected series when available.
+- `GR Book 1 Rating` onward: Goodreads average star ratings for every detected primary book in the series when Goodreads exposes the series rows. The export keeps the legacy sample header `GR Book 1O Rating` for book 10 and adds `GR Book 11 Rating`, `GR Book 12 Rating`, etc. for longer series.
 - `Book 1 No Of Rating` through `Book 10 No Of Rating`: Goodreads rating/review counts for those series books when available.
 
 ### Benchmark Filters
@@ -160,7 +160,7 @@ Create downloadable files from the current run.
 
 Common export profiles:
 
-- Final CSV: sample-compatible commissioning output with tier, length, MG, benchmark, and contact columns, including author email, agent email, email type/source, website, forms, Facebook link, and publisher details.
+- Final CSV: sample-compatible commissioning output with Amazon, Goodreads, dynamic series rating columns, tier mapping, minimum guarantee, rev-share, benchmark, and contact columns, including author email, agent email, email type/source, website, forms, Facebook link, and publisher details.
 - Full diagnostic CSV: includes provenance and data-quality columns for audit/debugging.
 - JSON diagnostic: structured diagnostic rows.
 - XLSX/PDF: available through backend export support.

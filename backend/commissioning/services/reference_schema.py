@@ -81,6 +81,9 @@ FALLBACK_REFERENCE_COLUMNS = [
     "Contact Forms",
     "Facebook link",
     "Publisher's details",
+    "Tier Mapping",
+    "Minimum Gurantee",
+    "Rev share %",
 ]
 
 

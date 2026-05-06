@@ -381,6 +381,9 @@ class CommissioningApiTests(unittest.TestCase):
             self.assertIn("Author Email", header)
             self.assertIn("Agent Email", header)
             self.assertIn("Website", header)
+            self.assertIn("Tier Mapping", header)
+            self.assertIn("Minimum Gurantee", header)
+            self.assertIn("Rev share %", header)
 
         import asyncio
 

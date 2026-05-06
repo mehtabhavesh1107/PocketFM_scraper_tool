@@ -94,6 +94,9 @@ SAMPLE_COMPATIBLE_COLUMNS = [
     "Contact Forms",
     "Facebook link",
     "Publisher's details",
+    "Tier Mapping",
+    "Minimum Gurantee",
+    "Rev share %",
 ]
 
 BENCHMARK_EXPORT_COLUMNS = ["Sub-genre", "Type", "Series books", "Audio score"]
@@ -155,12 +158,70 @@ DIAGNOSTIC_EXPORT_COLUMNS = [
 ]
 
 
-def export_columns_for_profile(profile: str = "sample") -> list[str]:
+def _series_rating_index_from_column(column: str) -> int | None:
+    if column == "GR Book 1O Rating":
+        return 10
+    match = re.fullmatch(r"GR Book (\d+) Rating", column)
+    if not match:
+        return None
+    return int(match.group(1))
+
+
+def _positive_int(value) -> int | None:
+    match = re.search(r"\d+", str(value or ""))
+    if not match:
+        return None
+    parsed = int(match.group(0))
+    return parsed if parsed > 0 else None
+
+
+def _max_series_rating_index(books: list[Book] | None) -> int:
+    max_index = 10
+    for book in books or []:
+        primary_book_count = _positive_int(book.primary_book_count)
+        if primary_book_count:
+            max_index = max(max_index, primary_book_count)
+        payload = _goodreads_payload(book)
+        ratings = payload.get("Goodreads Series Ratings")
+        rating_counts = payload.get("Goodreads Series Rating Counts")
+        if isinstance(ratings, list):
+            max_index = max(max_index, len(ratings))
+        if isinstance(rating_counts, list):
+            max_index = max(max_index, len(rating_counts))
+        for key, value in payload.items():
+            if value in (None, ""):
+                continue
+            index = _series_rating_index_from_column(str(key))
+            if index:
+                max_index = max(max_index, index)
+                continue
+            match = re.fullmatch(r"Book\s*(\d+)\s+Ratings", str(key))
+            if match:
+                max_index = max(max_index, int(match.group(1)))
+    return max_index
+
+
+def _with_dynamic_series_rating_columns(columns: list[str], books: list[Book] | None) -> list[str]:
+    max_index = _max_series_rating_index(books)
+    if max_index <= 10:
+        return columns
+
+    anchor = "GR Book 10 Rating" if "GR Book 10 Rating" in columns else "GR Book 1O Rating"
+    insert_at = columns.index(anchor) + 1 if anchor in columns else len(columns)
+    for index in range(11, max_index + 1):
+        column = f"GR Book {index} Rating"
+        if column not in columns:
+            columns.insert(insert_at, column)
+            insert_at += 1
+    return columns
+
+
+def export_columns_for_profile(profile: str = "sample", books: list[Book] | None = None) -> list[str]:
     normalized = (profile or "sample").lower().replace("-", "_")
     if normalized in {"sample", "sample_compatible", "sample_csv", "final", "final_csv"}:
-        return list(SAMPLE_COMPATIBLE_COLUMNS)
+        return _with_dynamic_series_rating_columns(list(SAMPLE_COMPATIBLE_COLUMNS), books)
     if normalized in {"full", "diagnostic", "full_diagnostic"}:
-        columns = list(SAMPLE_COMPATIBLE_COLUMNS)
+        columns = _with_dynamic_series_rating_columns(list(SAMPLE_COMPATIBLE_COLUMNS), books)
         for column in [*BENCHMARK_EXPORT_COLUMNS, *REQUESTED_MAPPED_COLUMNS, *DIAGNOSTIC_EXPORT_COLUMNS]:
             if column not in columns:
                 columns.append(column)
@@ -258,19 +319,39 @@ def _payload_value(payload: dict, *keys: str) -> str:
     return ""
 
 
+_FIXED_SERIES_RATING_ATTRS = {
+    1: "gr_book_1_rating",
+    2: "gr_book_2_rating",
+    3: "gr_book_3_rating",
+    4: "gr_book_4_rating",
+    5: "gr_book_5_rating",
+    6: "gr_book_6_rating",
+    7: "gr_book_7_rating",
+    8: "gr_book_8_rating",
+    9: "gr_book_9_rating",
+    10: "gr_book_10_rating",
+}
+
+
+def _series_rating_for_export(book: Book, index: int, default: str = "") -> str:
+    value = ""
+    attr = _FIXED_SERIES_RATING_ATTRS.get(index)
+    if attr:
+        value = str(getattr(book, attr, "") or "")
+    if index == 1:
+        value = value or str(book.goodreads_rating or book.rating or "")
+
+    payload = _goodreads_payload(book)
+    legacy_key = "GR Book 1O Rating" if index == 10 else f"GR Book {index} Rating"
+    value = value or _payload_value(payload, legacy_key, f"GR Book {index} Rating", f"Book {index} Ratings")
+    ratings = payload.get("Goodreads Series Ratings")
+    if not value and isinstance(ratings, list) and len(ratings) >= index:
+        value = str(ratings[index - 1] or "")
+    return _filled(value, default) if value not in (None, "") else default
+
+
 def _rating_values(book: Book) -> list[str]:
-    return [
-        _filled(book.gr_book_1_rating or book.goodreads_rating or book.rating),
-        _filled(book.gr_book_2_rating),
-        _filled(book.gr_book_3_rating),
-        _filled(book.gr_book_4_rating),
-        _filled(book.gr_book_5_rating),
-        _filled(book.gr_book_6_rating),
-        _filled(book.gr_book_7_rating),
-        _filled(book.gr_book_8_rating),
-        _filled(book.gr_book_9_rating),
-        _filled(book.gr_book_10_rating),
-    ]
+    return [_series_rating_for_export(book, index, "N/A") for index in range(1, 11)]
 
 
 def _rating_count_for(book: Book, index: int) -> str:
@@ -285,6 +366,9 @@ def _rating_count_for(book: Book, index: int) -> str:
     value = _payload_value(payload, spaced, compact, legacy, legacy_alt)
     if value:
         return _filled(value)
+    counts = payload.get("Goodreads Series Rating Counts")
+    if isinstance(counts, list) and len(counts) >= index and counts[index - 1] not in (None, ""):
+        return _filled(counts[index - 1])
     if index == 1:
         return _filled(book.goodreads_rating_count or book.rating_count)
     return "N/A"
@@ -400,6 +484,14 @@ def _tier_profile_for_export(book: Book) -> dict[str, str]:
     return {column: _clean_export_text(value) or derived[column] for column, value in persisted.items()}
 
 
+def _range_label(min_value: str, max_value: str) -> str:
+    left = _clean_export_text(min_value)
+    right = _clean_export_text(max_value)
+    if left and right:
+        return left if left == right else f"{left}-{right}"
+    return left or right
+
+
 def flatten_book(book: Book, columns: list[str] | None = None) -> dict:
     row = {column: "" for column in (columns or get_reference_columns())}
     amazon_payload = _amazon_payload(book)
@@ -429,6 +521,9 @@ def flatten_book(book: Book, columns: list[str] | None = None) -> dict:
     _set(row, "Goodreads no of rating", book.goodreads_rating_count)
     for column, value in tier_profile.items():
         _set(row, column, value)
+    _set(row, "Tier Mapping", tier_profile["Tier"])
+    _set(row, "Minimum Gurantee", _range_label(tier_profile["MG (Min)"], tier_profile["MG (Max)"]))
+    _set(row, "Rev share %", _range_label(tier_profile["Rev share (min)"], tier_profile["Rev Share (max)"]))
     _set(row, "Print Length", book.print_length)
     _set(row, "Book number", book.book_number)
     _set(row, "Format", _clean_format(book.format))
@@ -462,6 +557,10 @@ def flatten_book(book: Book, columns: list[str] | None = None) -> dict:
     _set(row, "GR Book 9 Rating", book.gr_book_9_rating)
     _set(row, "GR Book 1O Rating", book.gr_book_10_rating)
     _set(row, "GR Book 10 Rating", book.gr_book_10_rating)
+    for column in list(row):
+        index = _series_rating_index_from_column(column)
+        if index:
+            _set(row, column, _series_rating_for_export(book, index))
     _set(row, "Final List?", book.final_list)
     _set(row, "Rationale", book.rationale)
     apply_requested_mapped_columns(row, book)
@@ -507,7 +606,7 @@ def generate_export(db: Session, batch: Batch, export_format: str, *, profile: s
     if require_ready and not quality.get("ready"):
         raise ValueError("Batch is not export-ready. Resolve critical Data Quality issues first.")
 
-    columns = export_columns_for_profile(normalized_profile)
+    columns = export_columns_for_profile(normalized_profile, books=books)
     quality_by_id = {row["book_id"]: row for row in quality["rows"]}
     duplicate_status = _duplicate_statuses(books)
     rows = []
