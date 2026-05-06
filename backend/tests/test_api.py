@@ -21,7 +21,7 @@ os.environ["COMMISSIONING_DATABASE_URL"] = f"sqlite:///{(TEST_ROOT / 'backend_da
 
 from app import app
 from commissioning.db import SessionLocal, engine, init_db
-from commissioning.models import Base, Batch, Book, Contact
+from commissioning.models import Base, Batch, Book, Contact, Job
 from commissioning.services.discovery_service import discover_amazon_books
 from commissioning.services.amazon_http import discover_amazon_items
 
@@ -199,6 +199,77 @@ class CommissioningApiTests(unittest.TestCase):
         import asyncio
 
         asyncio.run(run())
+
+    def test_csv_fallback_imports_manual_rows(self):
+        async def run():
+            response = await self._request("POST", "/api/batches", json={"name": "Manual CSV"})
+            self.assertEqual(response.status_code, 200)
+            batch = response.json()
+            csv_body = b"Title,Author,URL,Rating,no. of rating,Goodread Link\nManual Book,Jane Author,https://www.amazon.com/dp/B0MANUAL01,4.3,1200,https://www.goodreads.com/book/show/1\n"
+            imported = await self._request(
+                "POST",
+                f"/api/batches/{batch['id']}/imports/csv",
+                files={"file": ("manual.csv", io.BytesIO(csv_body), "text/csv")},
+            )
+            self.assertEqual(imported.status_code, 200)
+            self.assertEqual(imported.json()["imported"], 1)
+
+            books = await self._request("GET", f"/api/batches/{batch['id']}/books")
+            self.assertEqual(books.status_code, 200)
+            item = books.json()["items"][0]
+            self.assertEqual(item["title"], "Manual Book")
+            self.assertEqual(item["rating_count"], 1200)
+            self.assertEqual(item["goodread_link"], "https://www.goodreads.com/book/show/1")
+
+            sources = await self._request("GET", f"/api/batches/{batch['id']}/sources")
+            self.assertTrue(any(row["source_type"] == "manual_csv" for row in sources.json()))
+
+        import asyncio
+
+        asyncio.run(run())
+
+    def test_database_worker_claims_queued_job(self):
+        import commissioning.jobs.worker as worker
+
+        db = SessionLocal()
+        try:
+            batch = Batch(name="Worker Queue")
+            db.add(batch)
+            db.flush()
+            job = Job(batch_id=batch.id, stage="fast_scrape", status="queued")
+            db.add(job)
+            db.commit()
+            job_id = job.id
+            batch_id = batch.id
+        finally:
+            db.close()
+
+        original_task = worker.TASKS["fast_scrape"]
+
+        def fake_task(claimed_job_id: str, claimed_batch_id: int) -> None:
+            self.assertEqual(claimed_job_id, job_id)
+            self.assertEqual(claimed_batch_id, batch_id)
+            task_db = SessionLocal()
+            try:
+                claimed = task_db.get(Job, claimed_job_id)
+                claimed.status = "completed"
+                claimed.message = "fake worker done"
+                task_db.commit()
+            finally:
+                task_db.close()
+
+        try:
+            worker.TASKS["fast_scrape"] = fake_task
+            self.assertTrue(worker.run_one_job())
+            db = SessionLocal()
+            try:
+                completed = db.get(Job, job_id)
+                self.assertEqual(completed.status, "completed")
+                self.assertEqual(completed.message, "fake worker done")
+            finally:
+                db.close()
+        finally:
+            worker.TASKS["fast_scrape"] = original_task
 
     def test_books_and_benchmark(self):
         db = SessionLocal()

@@ -10,7 +10,7 @@ import requests
 from bs4 import BeautifulSoup
 
 from ..settings import BACKEND_DIR, WORKSPACE_ROOT
-from .amazon_http import AmazonScrapeError, discover_amazon_records
+from .amazon_http import AmazonRateLimitedError, AmazonScrapeError, discover_amazon_records, reset_amazon_session
 
 if str(BACKEND_DIR) not in sys.path:
     sys.path.insert(0, str(BACKEND_DIR))
@@ -56,7 +56,7 @@ def _playwright_amazon_fallback(url: str, max_results: int) -> list[dict]:
     Imported lazily so installations without Playwright or its browser binaries
     still work for the HTTP-first path.
     """
-    if os.getenv("COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK", "").strip().lower() in {"1", "true", "yes"}:
+    if os.getenv("COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}:
         logger.warning("Playwright fallback disabled; skipping browser scrape for %s", url)
         return []
     try:
@@ -105,9 +105,40 @@ def discover_amazon_books(url: str, max_results: int, *, on_progress: callable |
         records = list(discover_amazon_records(url, max_results, on_progress=on_progress))
         if records:
             return records
+        logger.info("HTTP scraper returned no Amazon records for %s; retrying once with a fresh session", url)
+        reset_amazon_session()
+        records = list(discover_amazon_records(url, max_results, on_progress=on_progress))
+        if records:
+            return records
+    except AmazonRateLimitedError as exc:
+        reset_amazon_session()
+        raise RuntimeError(
+            f"Amazon rate-limited this source (HTTP {exc.status_code}). "
+            "The run was stopped for this URL instead of escalating to a CAPTCHA/browser fallback."
+        ) from exc
     except AmazonScrapeError as exc:
-        logger.info("HTTP scraper hit anti-bot for %s (%s); trying Playwright fallback", url, exc)
-        return _playwright_amazon_fallback(url, max_results)
+        logger.info("HTTP scraper hit anti-bot for %s (%s); retrying once with a fresh session", url, exc)
+        reset_amazon_session()
+        try:
+            records = list(discover_amazon_records(url, max_results, on_progress=on_progress))
+            if records:
+                return records
+        except AmazonRateLimitedError as retry_exc:
+            raise RuntimeError(
+                f"Amazon rate-limited this source (HTTP {retry_exc.status_code}). "
+                "The run was stopped for this URL instead of escalating to a CAPTCHA/browser fallback."
+            ) from retry_exc
+        except AmazonScrapeError:
+            if os.getenv("COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK", "1").strip().lower() in {"1", "true", "yes"}:
+                raise RuntimeError(
+                    "Amazon returned an anti-bot page. Automated browser fallback is disabled because it requires "
+                    "manual CAPTCHA/block clearing; use an authorized Amazon data source or retry later."
+                ) from exc
+        logger.info("Amazon HTTP retry still blocked for %s; trying Playwright fallback because it is explicitly enabled", url)
+        fallback_records = _playwright_amazon_fallback(url, max_results)
+        if fallback_records:
+            return fallback_records
+        raise RuntimeError("Amazon blocked this source and no automated fallback returned records.") from exc
     except requests.HTTPError as exc:
         raise RuntimeError(f"Amazon returned HTTP {exc.response.status_code} for {url}") from exc
     except requests.RequestException as exc:

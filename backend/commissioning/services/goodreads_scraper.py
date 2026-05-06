@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import html as html_lib
 import os
 import re
 import threading
@@ -31,6 +32,9 @@ REQUEST_ATTEMPTS = int(os.getenv("GOODREADS_REQUEST_ATTEMPTS", "3"))
 MIN_BOOK_MATCH_SCORE = 0.58
 MIN_CONFIDENT_MATCH_SCORE = 0.72
 MIN_REVIEW_SCORE = 0.35
+MIN_TITLE_AUTO_MATCH_SCORE = 0.78
+MIN_TITLE_REVIEW_MATCH_SCORE = 0.45
+MIN_AUTHOR_AUTO_MATCH_SCORE = 0.55
 HTML_CACHE_MAX_ENTRIES = max(0, int(os.getenv("GOODREADS_HTML_CACHE_MAX_ENTRIES", "0")))
 
 GOODREADS_ROOT = "https://www.goodreads.com"
@@ -67,7 +71,7 @@ def normalize_space(text: str) -> str:
 
 
 def normalize_title_for_match(title: str) -> str:
-    text = normalize_space(title).lower()
+    text = html_lib.unescape(normalize_space(title)).lower()
     text = re.sub(r"\([^)]*\)", " ", text)
     text = re.sub(r"\[[^\]]*\]", " ", text)
     text = re.sub(r"\bbook\s+\d+\b", " ", text)
@@ -123,6 +127,58 @@ def similarity(left: str, right: str) -> float:
     if not left or not right:
         return 0.0
     return SequenceMatcher(None, left, right).ratio()
+
+
+def title_match_score(query_title: str, candidate_title: str) -> float:
+    query = normalize_title_for_match(query_title)
+    candidate = normalize_title_for_match(candidate_title)
+    if not query or not candidate:
+        return 0.0
+    if query == candidate:
+        return 1.0
+
+    base = similarity(query, candidate)
+    if query in candidate or candidate in query:
+        query_tokens = query.split()
+        candidate_tokens = candidate.split()
+        shorter = min(len(query_tokens), len(candidate_tokens))
+        longer = max(len(query_tokens), len(candidate_tokens), 1)
+        coverage = shorter / longer
+        collection_markers = (
+            "book set",
+            "books collection",
+            "box set",
+            "boxed set",
+            "bundle",
+            "collection",
+            "complete",
+            "omnibus",
+            "series",
+        )
+        candidate_raw = html_lib.unescape(candidate_title or "").lower()
+        if coverage >= 0.72:
+            return max(base, 0.90)
+        if any(marker in candidate_raw for marker in collection_markers):
+            return min(max(base, 0.45), 0.55)
+        return max(base, 0.75)
+    return base
+
+
+def author_match_score(query_author: str, candidate_author: str) -> float:
+    query = normalize_title_for_match(query_author)
+    candidate = normalize_title_for_match(candidate_author)
+    if not query or not candidate:
+        return 0.0
+    if query == candidate:
+        return 1.0
+    base = similarity(query, candidate)
+    if query in candidate or candidate in query:
+        query_tokens = set(query.split())
+        candidate_tokens = set(candidate.split())
+        if query_tokens <= candidate_tokens or candidate_tokens <= query_tokens:
+            return max(base, 0.90)
+        return max(base, 0.72)
+    return base
 
 
 def normalize_url(url: str, keep_query: bool = False) -> str:
@@ -359,8 +415,13 @@ class GoodreadsScraper:
             if isinstance(authors, dict):
                 authors = [authors]
             if authors:
-                first_author = authors[0]
-                candidate.author = normalize_space(first_author.get("name", "") if isinstance(first_author, dict) else str(first_author))
+                author_names = []
+                for author in authors:
+                    name = author.get("name", "") if isinstance(author, dict) else str(author)
+                    name = normalize_space(name)
+                    if name:
+                        author_names.append(name)
+                candidate.author = ", ".join(dict.fromkeys(author_names))
             rating = json_ld.get("aggregateRating", {})
             candidate.rating = parse_number(rating.get("ratingValue"))
             candidate.rating_count = parse_number(rating.get("ratingCount") or rating.get("reviewCount"))
@@ -528,18 +589,24 @@ class GoodreadsScraper:
         author = clean_author_name(row)
         series = extract_series_name(row)
         genre = normalize_space(str(row.get("Genre", "")))
+        core_title = normalize_title_for_match(title)
 
         queries = []
+        if title and author:
+            if core_title:
+                queries.append(f"{core_title} {author}")
+                queries.append(f"{author} {core_title}")
+            queries.append(f"{title} {author}")
+            queries.append(f"{author} {title}")
+        if title:
+            queries.append(core_title or title)
+            queries.append(title)
+        if title and series:
+            queries.append(f"{core_title or title} {series}")
+            queries.append(f"{title} {series}")
         if series and author:
             queries.append(f"{series} {author}")
-        if author and series:
             queries.append(f"{author} {series}")
-        if author and title:
-            queries.append(f"{author} {title}")
-        if title and series:
-            queries.append(f"{title} {series}")
-        if author and title:
-            queries.append(f"{author} {normalize_title_for_match(title)}")
         for hint in GENRE_HINTS.get(genre, []):
             if author and title:
                 queries.append(f"{author} {normalize_title_for_match(title)} {hint}")
@@ -553,8 +620,59 @@ class GoodreadsScraper:
                 deduped.append(normalized)
         return deduped
 
+    def _match_quality(self, row: dict, candidate: BookCandidate) -> tuple[float, float, bool]:
+        title_score = title_match_score(str(row.get("Title", "")), candidate.title)
+        author_score = author_match_score(clean_author_name(row), candidate.author)
+        query_isbns = set(row_isbns(row))
+        candidate_isbns = {isbn for isbn in (candidate.isbn_10, candidate.isbn_13) if isbn}
+        return title_score, author_score, bool(query_isbns and query_isbns & candidate_isbns)
+
+    def _is_confident_match(self, row: dict, candidate: BookCandidate) -> bool:
+        title_score, author_score, exact_isbn = self._match_quality(row, candidate)
+        query_author = normalize_title_for_match(clean_author_name(row))
+        candidate_author = normalize_title_for_match(candidate.author)
+        if title_score < MIN_TITLE_AUTO_MATCH_SCORE:
+            return False
+        if query_author and candidate_author and author_score < MIN_AUTHOR_AUTO_MATCH_SCORE:
+            return False
+        if candidate.score >= MIN_CONFIDENT_MATCH_SCORE:
+            return True
+        return exact_isbn and candidate.score >= MIN_BOOK_MATCH_SCORE
+
+    def _confidence_failure_reason(self, row: dict, candidate: BookCandidate, status: str) -> str:
+        title_score, author_score, exact_isbn = self._match_quality(row, candidate)
+        reason_bits = [f"Best Goodreads candidate scored {candidate.score:.2f}"]
+        if title_score < MIN_TITLE_AUTO_MATCH_SCORE:
+            reason_bits.append(f"title match {title_score:.2f} below auto threshold")
+        query_author = normalize_title_for_match(clean_author_name(row))
+        candidate_author = normalize_title_for_match(candidate.author)
+        if query_author and candidate_author and author_score < MIN_AUTHOR_AUTO_MATCH_SCORE:
+            reason_bits.append(f"author match {author_score:.2f} below auto threshold")
+        if candidate.match_method == "isbn_search" and not exact_isbn:
+            reason_bits.append("ISBN search did not expose a matching ISBN on the candidate page")
+        suffix = "manual review is recommended" if status == "review" else "no confident Goodreads match was found"
+        return "; ".join(reason_bits) + f"; {suffix}."
+
+    def _prioritized_candidate_urls(self, candidate_books: dict[str, set[str]], *, expanded: bool = False) -> list[str]:
+        urls: list[str] = []
+        seen: set[str] = set()
+        per_method_limit = max(MAX_CANDIDATE_BOOKS, MAX_SEARCH_RESULTS + 4) if expanded else MAX_CANDIDATE_BOOKS
+        for method in ("existing_book_link", "goodreads_search", "ddg_book_fallback", "isbn_search"):
+            added_for_method = 0
+            for url, methods in candidate_books.items():
+                if method not in methods or url in seen:
+                    continue
+                urls.append(url)
+                seen.add(url)
+                added_for_method += 1
+                if added_for_method >= per_method_limit:
+                    break
+        return urls[: max(MAX_CANDIDATE_BOOKS, per_method_limit * 3)]
+
     def _score_book(self, row: dict, candidate: BookCandidate) -> float:
-        query_title = normalize_title_for_match(str(row.get("Title", "")))
+        candidate.evidence = []
+        query_title_raw = str(row.get("Title", ""))
+        query_title = normalize_title_for_match(query_title_raw)
         query_author = normalize_title_for_match(clean_author_name(row))
         query_series = normalize_title_for_match(extract_series_name(row))
         candidate_title = normalize_title_for_match(candidate.title)
@@ -566,27 +684,34 @@ class GoodreadsScraper:
         candidate_publisher = normalize_title_for_match(candidate.publisher)
         query_isbns = set(row_isbns(row))
         candidate_isbns = {isbn for isbn in (candidate.isbn_10, candidate.isbn_13) if isbn}
+        title_score = title_match_score(query_title_raw, candidate.title)
+        author_score = author_match_score(clean_author_name(row), candidate.author)
 
-        score = similarity(query_title, candidate_title) * 0.65
-        score += similarity(query_author, normalize_title_for_match(candidate.author)) * 0.25
+        score = title_score * 0.65
+        score += author_score * 0.25
         if query_series:
             score += similarity(query_series, normalize_title_for_match(candidate.series_name)) * 0.10
         if query_isbns and query_isbns & candidate_isbns:
-            score += 0.55
+            score += 0.45
             candidate.evidence.append("ISBN matched")
         elif candidate.match_method == "isbn_search":
-            score += 0.18
-            candidate.evidence.append("Found from ISBN search")
+            score += 0.04
+            candidate.evidence.append("Found from ISBN search without page ISBN confirmation")
 
         if query_title and candidate_title:
-            if query_title == candidate_title:
+            if title_score >= 0.98:
                 score += 0.20
                 candidate.evidence.append("Exact title match")
-            elif query_title in candidate_title or candidate_title in query_title:
+            elif title_score >= MIN_TITLE_AUTO_MATCH_SCORE:
                 score += 0.10
                 candidate.evidence.append("Close title match")
+            elif title_score < MIN_TITLE_REVIEW_MATCH_SCORE:
+                score -= 0.35
+                candidate.evidence.append("Title mismatch")
+            else:
+                score -= 0.12
+                candidate.evidence.append("Weak title match")
         if query_author and candidate.author:
-            author_score = similarity(query_author, normalize_title_for_match(candidate.author))
             if author_score >= 0.82:
                 score += 0.08
                 candidate.evidence.append("Author matched")
@@ -760,7 +885,7 @@ class GoodreadsScraper:
                 add_book(url, "goodreads_search")
             for url in series:
                 add_series(url, "goodreads_search")
-            if candidate_books and any("isbn_search" in methods for methods in candidate_books.values()):
+            if books and any("isbn_search" in methods for methods in candidate_books.values()):
                 break
 
         if not candidate_books:
@@ -779,34 +904,42 @@ class GoodreadsScraper:
             for url in links:
                 add_series(url, "ddg_series_fallback")
 
-        best = None
-        reviewed: list[BookCandidate] = []
-        prioritized_urls = sorted(
-            candidate_books,
-            key=lambda url: (
-                "isbn_search" not in candidate_books[url],
-                "existing_book_link" not in candidate_books[url],
-                url,
-            ),
-        )
-        for candidate_url in prioritized_urls[:MAX_CANDIDATE_BOOKS]:
-            try:
-                candidate = self.fetch_book(candidate_url)
-            except requests.RequestException:
-                continue
-            methods = sorted(candidate_books.get(candidate_url, {"goodreads_search"}))
-            for preferred in ("isbn_search", "existing_book_link", "goodreads_search", "ddg_book_fallback"):
-                if preferred in methods:
-                    candidate.match_method = preferred
-                    break
-            if not candidate.match_method:
-                candidate.match_method = methods[0]
-            candidate.score = self._score_book(row, candidate)
-            reviewed.append(candidate)
-            if best is None or candidate.score > best.score:
-                best = candidate
+        def score_candidates(*, expanded: bool = False) -> tuple[BookCandidate | None, list[dict]]:
+            best_candidate = None
+            reviewed_candidates: list[BookCandidate] = []
+            for candidate_url in self._prioritized_candidate_urls(candidate_books, expanded=expanded):
+                try:
+                    candidate = self.fetch_book(candidate_url)
+                except requests.RequestException:
+                    continue
+                methods = sorted(candidate_books.get(candidate_url, {"goodreads_search"}))
+                for preferred in ("existing_book_link", "goodreads_search", "ddg_book_fallback", "isbn_search"):
+                    if preferred in methods:
+                        candidate.match_method = preferred
+                        break
+                if not candidate.match_method:
+                    candidate.match_method = methods[0]
+                candidate.score = self._score_book(row, candidate)
+                reviewed_candidates.append(candidate)
+                if best_candidate is None or candidate.score > best_candidate.score:
+                    best_candidate = candidate
 
-        reviews = [self._candidate_review(candidate) for candidate in sorted(reviewed, key=lambda item: item.score, reverse=True)[:5]]
+            review_payloads = [
+                self._candidate_review(candidate)
+                for candidate in sorted(reviewed_candidates, key=lambda item: item.score, reverse=True)[:5]
+            ]
+            return best_candidate, review_payloads
+
+        best, reviews = score_candidates()
+        if best is not None and not self._is_confident_match(row, best):
+            fallback_title = normalize_space(str(row.get("Title", "")))
+            fallback_author = clean_author_name(row)
+            fallback_query = f'site:goodreads.com/book/show "{fallback_title}" "{fallback_author}"'
+            links = self.ddg_fallback_links(fallback_query, "/book/show/")
+            attempts.append({"method": "ddg_book_fallback", "query": fallback_query, "books": len(links)})
+            for url in links:
+                add_book(url, "ddg_book_fallback")
+            best, reviews = score_candidates(expanded=True)
 
         if best is None:
             return {
@@ -825,16 +958,11 @@ class GoodreadsScraper:
         if not resolved_series_url and candidate_series:
             resolved_series_url = normalize_url(next(iter(candidate_series)))
 
-        confident = best.score >= MIN_CONFIDENT_MATCH_SCORE or (
-            "isbn_search" in candidate_books.get(best.url, set()) and best.score >= MIN_BOOK_MATCH_SCORE
-        )
+        confident = self._is_confident_match(row, best)
         if not confident:
-            status = "review" if best.score >= MIN_REVIEW_SCORE else "unmatched"
-            reason = (
-                f"Best Goodreads candidate scored {best.score:.2f}; manual review is recommended."
-                if status == "review"
-                else f"Best Goodreads candidate scored only {best.score:.2f}."
-            )
+            title_score, _, _ = self._match_quality(row, best)
+            status = "review" if best.score >= MIN_REVIEW_SCORE and title_score >= MIN_TITLE_REVIEW_MATCH_SCORE else "unmatched"
+            reason = self._confidence_failure_reason(row, best, status)
             return {
                 "Goodread Link": search_url,
                 "Goodreads Match Status": status,

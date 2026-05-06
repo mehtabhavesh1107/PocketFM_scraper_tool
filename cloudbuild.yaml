@@ -1,0 +1,99 @@
+substitutions:
+  _REGION: us-central1
+  _REPOSITORY: pocketfm
+  _SERVICE: pocketfm-commissioning
+  _WORKER_SERVICE: pocketfm-commissioning-worker
+  _IMAGE: pocketfm-commissioning
+  _CLOUD_SQL_INSTANCE: pocketfm-postgres
+  _CLOUD_SQL_DATABASE: pocketfm
+  _CLOUD_SQL_USER: pocketfm
+  _DB_PASSWORD_SECRET: pocketfm-db-password
+  _GCS_EXPORT_BUCKET_SUFFIX: pocketfm-exports
+
+steps:
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - build
+      - -t
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA
+      - .
+
+  - name: gcr.io/cloud-builders/docker
+    args:
+      - push
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_SERVICE}
+      - --image
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA
+      - --region
+      - ${_REGION}
+      - --platform
+      - managed
+      - --allow-unauthenticated
+      - --port
+      - "8080"
+      - --memory
+      - 2Gi
+      - --cpu
+      - "2"
+      - --concurrency
+      - "1"
+      - --timeout
+      - 3600s
+      - --no-cpu-throttling
+      - --min-instances
+      - "1"
+      - --set-env-vars
+      - COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK=1,AMAZON_DETAIL_WORKERS=1,AMAZON_PAGE_DELAY_SECONDS=2.0,COMMISSIONING_ALLOWED_ORIGINS=*,COMMISSIONING_JOB_BACKEND=database,CLOUD_SQL_CONNECTION_NAME=$PROJECT_ID:${_REGION}:${_CLOUD_SQL_INSTANCE},CLOUD_SQL_DATABASE=${_CLOUD_SQL_DATABASE},CLOUD_SQL_USER=${_CLOUD_SQL_USER},COMMISSIONING_GCS_BUCKET=$PROJECT_ID-${_GCS_EXPORT_BUCKET_SUFFIX}
+      - --set-secrets
+      - CLOUD_SQL_PASSWORD=${_DB_PASSWORD_SECRET}:latest
+      - --add-cloudsql-instances
+      - $PROJECT_ID:${_REGION}:${_CLOUD_SQL_INSTANCE}
+
+  - name: gcr.io/google.com/cloudsdktool/cloud-sdk
+    entrypoint: gcloud
+    args:
+      - run
+      - deploy
+      - ${_WORKER_SERVICE}
+      - --image
+      - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA
+      - --region
+      - ${_REGION}
+      - --platform
+      - managed
+      - --allow-unauthenticated
+      - --port
+      - "8080"
+      - --memory
+      - 2Gi
+      - --cpu
+      - "2"
+      - --concurrency
+      - "1"
+      - --timeout
+      - 3600s
+      - --no-cpu-throttling
+      - --min-instances
+      - "1"
+      - --max-instances
+      - "1"
+      - --command
+      - uvicorn
+      - --args
+      - worker_service:app,--host,0.0.0.0,--port,8080
+      - --set-env-vars
+      - COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK=1,AMAZON_DETAIL_WORKERS=1,AMAZON_PAGE_DELAY_SECONDS=2.0,COMMISSIONING_ALLOWED_ORIGINS=*,COMMISSIONING_JOB_BACKEND=database,CLOUD_SQL_CONNECTION_NAME=$PROJECT_ID:${_REGION}:${_CLOUD_SQL_INSTANCE},CLOUD_SQL_DATABASE=${_CLOUD_SQL_DATABASE},CLOUD_SQL_USER=${_CLOUD_SQL_USER},COMMISSIONING_GCS_BUCKET=$PROJECT_ID-${_GCS_EXPORT_BUCKET_SUFFIX}
+      - --set-secrets
+      - CLOUD_SQL_PASSWORD=${_DB_PASSWORD_SECRET}:latest
+      - --add-cloudsql-instances
+      - $PROJECT_ID:${_REGION}:${_CLOUD_SQL_INSTANCE}
+
+images:
+  - ${_REGION}-docker.pkg.dev/$PROJECT_ID/${_REPOSITORY}/${_IMAGE}:$COMMIT_SHA

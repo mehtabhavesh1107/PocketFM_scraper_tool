@@ -14,6 +14,7 @@ from __future__ import annotations
 import logging
 import html as html_lib
 import os
+import random
 import re
 import threading
 import time
@@ -55,7 +56,7 @@ def _read_float_env(name: str, default: float, *, minimum: float = 1.0, maximum:
 
 REQUEST_TIMEOUT = _read_float_env("AMAZON_REQUEST_TIMEOUT_SECONDS", 25, minimum=3, maximum=60)
 REQUEST_RETRIES = _read_int_env("AMAZON_REQUEST_RETRIES", 2, minimum=0, maximum=3)
-PAGE_DELAY_SECONDS = 0.6
+PAGE_DELAY_SECONDS = _read_float_env("AMAZON_PAGE_DELAY_SECONDS", 2.0, minimum=0.0, maximum=30.0)
 MAX_PAGES_PER_SOURCE = 100  # safety ceiling — Amazon search caps at ~7 pages anyway
 DEFAULT_RESULT_CEILING = 5000
 DETAIL_THIN_HTML_BYTES = 50_000
@@ -77,13 +78,24 @@ def _env_float(name: str, default: float, *, minimum: float = 0.0, maximum: floa
     return max(minimum, min(value, maximum))
 
 
-AMAZON_DETAIL_WORKERS = _env_int("AMAZON_DETAIL_WORKERS", 4, maximum=12)
+AMAZON_DETAIL_WORKERS = _env_int("AMAZON_DETAIL_WORKERS", 1, maximum=4)
 AMAZON_DETAIL_RETRY_ROUNDS = _env_int("AMAZON_DETAIL_RETRY_ROUNDS", 1, minimum=0, maximum=5)
 AMAZON_DETAIL_RETRY_DELAY_SECONDS = _env_float("AMAZON_DETAIL_RETRY_DELAY_SECONDS", 1.5, maximum=15.0)
 
 
 class AmazonScrapeError(RuntimeError):
     """Raised when Amazon returns a captcha / robot-check / non-2xx page."""
+
+
+class AmazonRateLimitedError(AmazonScrapeError):
+    """Raised when Amazon asks the scraper to slow down or stop."""
+
+    def __init__(self, url: str, status_code: int, retry_after: float | None = None):
+        self.url = url
+        self.status_code = status_code
+        self.retry_after = retry_after
+        retry_text = f"; retry after {retry_after:.0f}s" if retry_after else ""
+        super().__init__(f"Amazon returned HTTP {status_code} for {url}{retry_text}")
 
 
 @dataclass
@@ -151,6 +163,10 @@ def _detect_block(html: str) -> str | None:
         "to discuss automated access to amazon",
         "type the characters you see in this image",
         "api-services-support@amazon.com",
+        "bm-verify=",
+        "/_sec/verify?provider=interstitial",
+        "triggerinterstitialchallenge",
+        "m.media-amazon.com/images/s/sash",
     )
     for marker in markers:
         if marker in lowered:
@@ -172,6 +188,32 @@ def _session() -> requests.Session:
     return sess
 
 
+def reset_amazon_session() -> None:
+    sess = getattr(_thread_local, "amazon_session", None)
+    if sess is not None:
+        sess.close()
+    _thread_local.amazon_session = None
+
+
+def _retry_after_seconds(value: str | None) -> float | None:
+    if not value:
+        return None
+    try:
+        seconds = float(value)
+    except ValueError:
+        return None
+    if seconds <= 0:
+        return None
+    return min(seconds, 120.0)
+
+
+def _request_backoff_seconds(attempt: int, exc: Exception) -> float:
+    if isinstance(exc, AmazonRateLimitedError) and exc.retry_after:
+        return exc.retry_after
+    base = min(2.0 * (2 ** attempt), 30.0)
+    return base + random.uniform(0.0, 1.0)
+
+
 def _fetch(url: str, *, retries: int | None = None) -> str:
     sess = _session()
     last_err: Exception | None = None
@@ -180,6 +222,12 @@ def _fetch(url: str, *, retries: int | None = None) -> str:
     for attempt in range(retries + 1):
         try:
             response = sess.get(url, timeout=REQUEST_TIMEOUT, allow_redirects=True)
+            if response.status_code in {429, 503}:
+                raise AmazonRateLimitedError(
+                    url,
+                    response.status_code,
+                    retry_after=_retry_after_seconds(response.headers.get("Retry-After")),
+                )
             response.raise_for_status()
             block = _detect_block(response.text)
             if block:
@@ -188,7 +236,7 @@ def _fetch(url: str, *, retries: int | None = None) -> str:
         except (requests.RequestException, AmazonScrapeError) as exc:
             last_err = exc
             if attempt < retries:
-                time.sleep(0.8 * (attempt + 1))
+                time.sleep(_request_backoff_seconds(attempt, exc))
             else:
                 raise
     raise last_err  # pragma: no cover - unreachable
@@ -656,7 +704,7 @@ def iter_amazon_listing(url: str, *, max_results: int = 0) -> Iterator[AmazonIte
             html = _fetch(current)
         except (requests.RequestException, AmazonScrapeError) as exc:
             logger.warning("Amazon listing fetch failed for %s: %s", current, exc)
-            return
+            raise
 
         if is_search:
             items, next_link = _parse_search_html(html, base_url=base)
@@ -753,6 +801,8 @@ def _fetch_detail_html(url: str) -> tuple[str, str]:
                 logger.info("Amazon detail route returned thin shell page for %s; trying alternate route", candidate)
                 continue
             return html, candidate
+        except AmazonRateLimitedError:
+            raise
         except (requests.RequestException, AmazonScrapeError) as exc:
             last_err = exc
             logger.info("Amazon detail route failed for %s: %s", candidate, exc)
@@ -1109,6 +1159,8 @@ def _detail_missing_retryable_core(detail: AmazonDetail) -> bool:
 def _detail_needs_retry(item: AmazonItem, detail: AmazonDetail | None) -> bool:
     if detail is None:
         return True
+    if any(flag.startswith("detail_deferred_") for flag in detail.amazon_quality_flags):
+        return False
     asin = item.asin or detail.source_asin or detail.asin
     has_title = _meaningful_title(detail.title, asin) or _meaningful_title(item.title, asin)
     has_author = bool(detail.author or item.author or detail.contributors)
@@ -1151,6 +1203,19 @@ def _fetch_amazon_detail_with_retries(item: AmazonItem) -> AmazonDetail | None:
                 AMAZON_DETAIL_RETRY_ROUNDS,
             )
     return _finalize_detail_quality(item, last_detail)
+
+
+def _deferred_detail(url: str, flag: str, reason: str) -> AmazonDetail:
+    asin = _extract_asin(url)
+    return AmazonDetail(
+        asin=asin,
+        source_asin=asin,
+        detail_asin=asin,
+        source_url=url,
+        detail_url=url,
+        amazon_quality_flags=[flag],
+        raw_values={"deferred_reason": reason},
+    )
 
 
 def _parse_amazon_detail_page(html: str, url: str) -> tuple[AmazonDetail, BeautifulSoup]:
@@ -1236,7 +1301,13 @@ def fetch_amazon_detail(url: str) -> AmazonDetail | None:
         return None
     try:
         html, effective_url = _fetch_detail_html(url)
-    except (requests.RequestException, AmazonScrapeError) as exc:
+    except AmazonRateLimitedError as exc:
+        logger.info("Amazon detail fetch rate-limited for %s: %s", url, exc)
+        return _deferred_detail(url, "detail_deferred_rate_limited", str(exc))
+    except AmazonScrapeError as exc:
+        logger.info("Amazon detail fetch blocked for %s: %s", url, exc)
+        return _deferred_detail(url, "detail_deferred_blocked", str(exc))
+    except requests.RequestException as exc:
         logger.info("Amazon detail fetch failed for %s: %s", url, exc)
         return None
 
@@ -1349,7 +1420,7 @@ def to_record(item: AmazonItem, detail: AmazonDetail | None = None) -> dict:
             "best_sellers_rank_number": detail.best_sellers_rank_number if detail else "",
             "best_sellers_rank_text": best_rank_text,
             "price": item.price,
-            "detail_fetched": bool(detail),
+            "detail_fetched": bool(detail and not any(flag.startswith("detail_deferred_") for flag in quality_flags)),
             "contributors": detail.contributors if detail else [],
             "customer_reviews": detail.customer_reviews if detail else "",
             "amazon_quality_flags": quality_flags,

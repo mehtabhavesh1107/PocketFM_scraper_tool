@@ -2,10 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import re
-from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, Form, Header, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, StreamingResponse
+from fastapi.responses import FileResponse, Response, StreamingResponse
 from sqlalchemy.orm import Session
 
 from ..db import get_db
@@ -50,6 +49,8 @@ from ..services.curation_service import (
 from ..services.data_quality_service import batch_data_quality
 from ..services.export_service import generate_export
 from ..services.goodreads_service import candidate_updates_for_book
+from ..services.manual_import_service import import_manual_csv
+from ..services.storage_service import export_download
 from ..services.mapping_service import apply_benchmark_mapping, apply_metric_mapping
 from ..services.batch_service import DEFAULT_BATCH_NAME, DEFAULT_WORKSPACE_ID, ensure_working_batch
 from ..services.reference_schema import reference_column_fields
@@ -234,7 +235,10 @@ def add_sources(batch_id: int, payload: list[SourceLinkCreate], workspace_id: st
 @router.put("/batches/{batch_id}/sources", response_model=list[SourceLinkRead])
 def replace_sources(batch_id: int, payload: list[SourceLinkCreate], workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     batch = _get_batch_or_404(db, batch_id, workspace_id)
-    db.query(SourceLink).filter(SourceLink.batch_id == batch.id).delete(synchronize_session=False)
+    db.query(SourceLink).filter(
+        SourceLink.batch_id == batch.id,
+        SourceLink.source_type.in_(("amazon", "goodreads")),
+    ).delete(synchronize_session=False)
     db.commit()
     return add_sources(batch.id, payload, workspace_id, db)
 
@@ -243,6 +247,22 @@ def replace_sources(batch_id: int, payload: list[SourceLinkCreate], workspace_id
 def get_sources(batch_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
     batch = _get_batch_or_404(db, batch_id, workspace_id)
     return db.query(SourceLink).filter(SourceLink.batch_id == batch.id).order_by(SourceLink.id.asc()).all()
+
+
+@router.post("/batches/{batch_id}/imports/csv")
+async def import_csv_fallback(
+    batch_id: int,
+    file: UploadFile = File(...),
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
+    batch = _get_batch_or_404(db, batch_id, workspace_id)
+    content = await file.read()
+    try:
+        result = import_manual_csv(db, batch, filename=file.filename or "manual-upload.csv", content=content)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return result
 
 
 def _queue_job(db: Session, *, batch_id: int, stage: str, task) -> Job:
@@ -468,10 +488,19 @@ def download_export(export_id: int, workspace_id: str = Depends(get_workspace_id
     export = db.get(ExportRecord, export_id)
     if export is None or export.batch.workspace_id != workspace_id:
         raise HTTPException(status_code=404, detail="Export not found")
-    path = Path(export.file_path)
-    if not path.exists():
-        raise HTTPException(status_code=404, detail="Export file missing")
-    return FileResponse(path, filename=path.name)
+    try:
+        download = export_download(export)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=f"Export file missing: {exc}") from exc
+    if download.local_path is not None:
+        if not download.local_path.exists():
+            raise HTTPException(status_code=404, detail="Export file missing")
+        return FileResponse(download.local_path, filename=download.filename, media_type=download.media_type)
+    return Response(
+        content=download.content or b"",
+        media_type=download.media_type,
+        headers={"Content-Disposition": f'attachment; filename="{download.filename}"'},
+    )
 
 
 @router.post("/batches/{batch_id}/sync/google-sheet")

@@ -15,6 +15,7 @@ from ..settings import GENERATED_DIR
 from .data_quality_service import batch_data_quality
 from .mapping_service import apply_benchmark_mapping, commissioning_tier_profile
 from .reference_schema import get_reference_columns
+from .storage_service import upload_export_file
 
 
 SAMPLE_COMPATIBLE_COLUMNS = [
@@ -521,6 +522,7 @@ def generate_export(db: Session, batch: Batch, export_format: str, *, profile: s
         row_count=len(rows),
         metadata_json={
             "columns": list(frame.columns),
+            "filename": path.name,
             "profile": normalized_profile,
             "workspace_id": batch.workspace_id,
             "quality_summary": {key: value for key, value in quality.items() if key != "rows"},
@@ -529,4 +531,14 @@ def generate_export(db: Session, batch: Batch, export_format: str, *, profile: s
     db.add(record)
     db.commit()
     db.refresh(record)
+    storage_metadata = upload_export_file(path, batch, record)
+    if storage_metadata:
+        record.file_path = storage_metadata["gcs_uri"]
+        record.metadata_json = {**(record.metadata_json or {}), **storage_metadata, "local_staging_deleted": True}
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            record.metadata_json = {**record.metadata_json, "local_staging_deleted": False}
+        db.commit()
+        db.refresh(record)
     return record

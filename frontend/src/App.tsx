@@ -1,3 +1,4 @@
+import { Plus, X } from 'lucide-react';
 import { useEffect, useMemo, useState } from 'react';
 import type { ReactNode } from 'react';
 import './App.css';
@@ -142,7 +143,7 @@ interface Job {
   error?: string;
 }
 
-function isRunningJob(job?: Job | null): boolean {
+function isRunningJob(job?: Job | null): job is Job {
   return job?.status === 'queued' || job?.status === 'running';
 }
 
@@ -174,15 +175,21 @@ interface StoredSchema {
 }
 
 interface SourceRow {
-  source_type: 'amazon' | 'goodreads';
+  id?: number;
+  batch_id?: number;
+  source_type: 'amazon' | 'goodreads' | 'manual_csv';
   url: string;
   max_results: number;
   output_format: string;
+  status?: string;
+  metadata_json?: Record<string, unknown>;
 }
 
 interface SourceInput {
   url: string;
   output_format: string;
+  status?: string;
+  metadata_json?: Record<string, unknown>;
 }
 
 interface ExportRecord {
@@ -282,18 +289,8 @@ const pageLabels: Record<PageId, string> = {
 };
 
 const initialSourceInputs: Record<'amazon' | 'goodreads', SourceInput[]> = {
-  amazon: [
-    { url: '', output_format: 'CSV' },
-    { url: '', output_format: 'CSV' },
-    { url: '', output_format: 'CSV' },
-    { url: '', output_format: 'CSV' },
-  ],
-  goodreads: [
-    { url: '', output_format: 'CSV' },
-    { url: '', output_format: 'CSV' },
-    { url: '', output_format: 'CSV' },
-    { url: '', output_format: 'CSV' },
-  ],
+  amazon: [{ url: '', output_format: 'CSV' }],
+  goodreads: [{ url: '', output_format: 'CSV' }],
 };
 
 function createWorkspaceId(): string {
@@ -315,6 +312,10 @@ function emptySourceInputs(): Record<'amazon' | 'goodreads', SourceInput[]> {
     amazon: initialSourceInputs.amazon.map((row) => ({ ...row })),
     goodreads: initialSourceInputs.goodreads.map((row) => ({ ...row })),
   };
+}
+
+function blankSourceInput(outputFormat = 'CSV'): SourceInput {
+  return { url: '', output_format: outputFormat };
 }
 
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
@@ -679,15 +680,15 @@ function App() {
       return;
     }
     (['amazon', 'goodreads'] as const).forEach((source) => {
-      sources
-        .filter((item) => item.source_type === source)
-        .slice(0, 4)
-        .forEach((item, index) => {
-          next[source][index] = {
-            url: item.url,
-            output_format: item.output_format,
-          };
-        });
+      const savedRows = sources.filter((item) => item.source_type === source);
+      if (savedRows.length) {
+        next[source] = savedRows.map((item) => ({
+          url: item.url,
+          output_format: item.output_format || 'CSV',
+          status: item.status,
+          metadata_json: item.metadata_json,
+        }));
+      }
     });
     setSourceInputs(next);
   }
@@ -725,15 +726,40 @@ function App() {
     }));
   }
 
+  function addSource(source: 'amazon' | 'goodreads') {
+    setSourceInputs((prev) => {
+      const outputFormat = prev[source][0]?.output_format || 'CSV';
+      return {
+        ...prev,
+        [source]: [...prev[source], blankSourceInput(outputFormat)],
+      };
+    });
+  }
+
+  function removeSource(source: 'amazon' | 'goodreads', index: number) {
+    setSourceInputs((prev) => {
+      const outputFormat = prev[source][index]?.output_format || prev[source][0]?.output_format || 'CSV';
+      const rows = prev[source].filter((_, rowIndex) => rowIndex !== index);
+      return {
+        ...prev,
+        [source]: rows.length ? rows : [blankSourceInput(outputFormat)],
+      };
+    });
+  }
+
   async function saveSources() {
     if (!batch) return [];
     const payload: SourceRow[] = [];
+    const seen = new Set<string>();
     (['amazon', 'goodreads'] as const).forEach((source) => {
       sourceInputs[source].forEach((row) => {
-        if (row.url.trim()) {
+        const url = row.url.trim();
+        const key = `${source}:${url}`;
+        if (url && !seen.has(key)) {
+          seen.add(key);
           payload.push({
             source_type: source,
-            url: row.url.trim(),
+            url,
             max_results: 0,
             output_format: row.output_format,
           });
@@ -747,6 +773,24 @@ function App() {
       method: 'PUT',
       body: JSON.stringify(payload),
     });
+  }
+
+  async function importManualCsv(file: File) {
+    if (!batch) return;
+    setError('');
+    setNotice('');
+    const form = new FormData();
+    form.append('file', file);
+    try {
+      const result = await api<{ imported: number; skipped: number; filename: string }>(`/batches/${batch.id}/imports/csv`, {
+        method: 'POST',
+        body: form,
+      });
+      await refreshAll();
+      setNotice(`CSV fallback imported ${result.imported} rows${result.skipped ? ` and skipped ${result.skipped}` : ''}.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Could not import CSV fallback');
+    }
   }
 
   async function runJob(kind: JobKind) {
@@ -1064,6 +1108,9 @@ function App() {
               schemas={schemas}
               sourceInputs={sourceInputs}
               updateSource={updateSource}
+              addSource={addSource}
+              removeSource={removeSource}
+              importManualCsv={importManualCsv}
               toggleSchemaField={toggleSchemaField}
               runJob={runJob}
               jobRunning={jobRunning}
@@ -1451,6 +1498,9 @@ function ScrapingPage({
   schemas,
   sourceInputs,
   updateSource,
+  addSource,
+  removeSource,
+  importManualCsv,
   toggleSchemaField,
   runJob,
   jobRunning,
@@ -1461,6 +1511,9 @@ function ScrapingPage({
   schemas: Partial<Record<SourceType, StoredSchema>>;
   sourceInputs: Record<'amazon' | 'goodreads', SourceInput[]>;
   updateSource: (source: 'amazon' | 'goodreads', index: number, patch: Partial<SourceInput>) => void;
+  addSource: (source: 'amazon' | 'goodreads') => void;
+  removeSource: (source: 'amazon' | 'goodreads', index: number) => void;
+  importManualCsv: (file: File) => void;
   toggleSchemaField: (source: SourceType, field: FieldDefinition) => void;
   runJob: (kind: JobKind) => void;
   jobRunning: boolean;
@@ -1496,9 +1549,27 @@ function ScrapingPage({
       </div>
 
       <div className="two-panel">
-        <SourceCard source="amazon" title="Amazon catalogue links" badge="Amazon.in / .com" rows={sourceInputs.amazon} updateSource={updateSource} />
-        <SourceCard source="goodreads" title="Goodreads catalogue links" badge="Goodreads.com" rows={sourceInputs.goodreads} updateSource={updateSource} />
+        <SourceCard
+          source="amazon"
+          title="Amazon catalogue links"
+          badge="Amazon.in / .com"
+          rows={sourceInputs.amazon}
+          updateSource={updateSource}
+          addSource={addSource}
+          removeSource={removeSource}
+        />
+        <SourceCard
+          source="goodreads"
+          title="Goodreads catalogue links"
+          badge="Goodreads.com"
+          rows={sourceInputs.goodreads}
+          updateSource={updateSource}
+          addSource={addSource}
+          removeSource={removeSource}
+        />
       </div>
+
+      <AmazonBlockedDashboard rows={sourceInputs.amazon} importManualCsv={importManualCsv} />
 
       <div className="action-row">
         <div className="action-note">Fast scrape keeps full Amazon detail accuracy and skips Goodreads until you run enrichment.</div>
@@ -1581,31 +1652,107 @@ function SourceCard({
   badge,
   rows,
   updateSource,
+  addSource,
+  removeSource,
 }: {
   source: 'amazon' | 'goodreads';
   title: string;
   badge: string;
   rows: SourceInput[];
   updateSource: (source: 'amazon' | 'goodreads', index: number, patch: Partial<SourceInput>) => void;
+  addSource: (source: 'amazon' | 'goodreads') => void;
+  removeSource: (source: 'amazon' | 'goodreads', index: number) => void;
 }) {
+  const filledCount = rows.filter((row) => row.url.trim()).length;
+
   return (
     <div className="card">
-      <div className="card-title"><span className={`source-dot ${source}`} /> {title}<span className={`tag ${source === 'amazon' ? 'tg-a' : 'tg-t'} card-tag`}>{badge}</span></div>
-      <div className="helper-text">Paste bestseller lists, category pages, shelf pages, or author pages.</div>
+      <div className="card-title">
+        <span className={`source-dot ${source}`} />
+        {title}
+        <span className="source-count">{filledCount} link{filledCount === 1 ? '' : 's'}</span>
+        <span className={`tag ${source === 'amazon' ? 'tg-a' : 'tg-t'} card-tag`}>{badge}</span>
+      </div>
       <div className="link-group">
         {rows.map((row, index) => (
           <div className="link-row" key={`${source}-${index}`}>
             <div className="link-num">{index + 1}</div>
             <div className={`link-status ${row.url ? 'ok' : ''}`} />
-            <input type="url" value={row.url} placeholder={`Paste ${source} URL...`} onChange={(event) => updateSource(source, index, { url: event.target.value })} />
+            <input type="url" value={row.url} placeholder={`Paste ${source} URL...`} onChange={(event) => updateSource(source, index, { url: event.target.value, status: undefined, metadata_json: undefined })} />
+            {row.status && <span className={`source-status-pill ${row.status}`}>{row.status}</span>}
+            <button
+              type="button"
+              className="icon-btn link-remove"
+              onClick={() => removeSource(source, index)}
+              disabled={rows.length === 1 && !row.url.trim()}
+              aria-label={`Remove ${source} link ${index + 1}`}
+              title="Remove link"
+            >
+              <X size={14} aria-hidden="true" />
+            </button>
           </div>
         ))}
       </div>
       <div className="source-options">
+        <button type="button" className="btn btn-sm" onClick={() => addSource(source)}>
+          <Plus size={14} aria-hidden="true" /> Add link
+        </button>
+        <div className="spacer" />
         <label className="field-label">Output format</label>
         <select value={rows[0]?.output_format || 'CSV'} onChange={(event) => rows.forEach((_, index) => updateSource(source, index, { output_format: event.target.value }))}>
           <option>CSV</option><option>JSON</option><option>XLSX</option>
         </select>
+      </div>
+    </div>
+  );
+}
+
+function AmazonBlockedDashboard({
+  rows,
+  importManualCsv,
+}: {
+  rows: SourceInput[];
+  importManualCsv: (file: File) => void;
+}) {
+  const activeRows = rows.filter((row) => row.url.trim());
+  const blockedRows = activeRows.filter((row) => ['blocked', 'failed', 'empty'].includes(row.status || ''));
+  const processedRows = activeRows.filter((row) => row.status === 'processed');
+  const pendingRows = activeRows.filter((row) => !row.status || row.status === 'pending');
+  return (
+    <div className="card blocked-dashboard">
+      <div className="card-title">
+        Amazon blocked / deferred
+        <span className="source-count">{blockedRows.length} needs fallback</span>
+      </div>
+      <div className="quality-summary-grid">
+        <div className="quality-summary"><strong>{processedRows.length}</strong><span>Processed</span></div>
+        <div className="quality-summary"><strong>{pendingRows.length}</strong><span>Pending</span></div>
+        <div className="quality-summary"><strong>{blockedRows.length}</strong><span>Blocked</span></div>
+      </div>
+      <div className="blocked-dashboard-grid">
+        <div>
+          {blockedRows.length === 0 && <div className="empty-state">No blocked Amazon sources in this run.</div>}
+          {blockedRows.map((row, index) => (
+            <div className="blocked-source-row" key={`${row.status}-${index}-${row.url}`}>
+              <span className={`source-status-pill ${row.status || 'pending'}`}>{row.status || 'pending'}</span>
+              <span>{row.url}</span>
+            </div>
+          ))}
+        </div>
+        <label className="upload-zone upload-zone-compact">
+          <span className="upload-icon">▤</span>
+          <span className="upload-label">Upload CSV fallback</span>
+          <span className="upload-hint">Title, Author, URL, ratings, Goodreads, and series columns</span>
+          <input
+            type="file"
+            accept=".csv,text/csv"
+            onChange={(event) => {
+              const file = event.currentTarget.files?.[0];
+              if (file) importManualCsv(file);
+              event.currentTarget.value = '';
+            }}
+          />
+        </label>
       </div>
     </div>
   );

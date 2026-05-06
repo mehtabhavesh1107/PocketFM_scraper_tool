@@ -1,11 +1,62 @@
 # Pocket FM Commissioning Tool
 
-A local-only commissioning workflow for finding, enriching, evaluating, and exporting title candidates for Pocket FM.
+A commissioning workflow for finding, enriching, evaluating, and exporting title candidates for Pocket FM. It runs locally for development and can be deployed to Google Cloud Run with Cloud SQL Postgres, Cloud Storage exports, and a separate queue worker.
 
 The tool is split into two local apps:
 
-- `backend/`: FastAPI API, background jobs, SQLite persistence, scraper/enrichment services, data quality checks, and exports.
+- `backend/`: FastAPI API, background jobs, SQLite/Postgres persistence, scraper/enrichment services, data quality checks, and local or Cloud Storage exports.
 - `frontend/`: React + Vite dashboard that talks to the backend through the local `/api` proxy.
+
+## Current Status
+
+The repo is cloud-ready, but the permanent Google Cloud deployment is not complete until billing is linked and a real Cloud Run smoke test passes.
+
+What is already in place:
+
+- Local app and packaged Docker image were tested successfully.
+- Google Cloud deployment files are present: `Dockerfile`, `.dockerignore`, `cloudbuild.yaml`, and `scripts/deploy_cloud_run.ps1`.
+- The backend supports SQLite locally and Cloud SQL Postgres in cloud mode.
+- Exports can be stored locally or in Cloud Storage.
+- Long-running jobs can run in-process locally or through a database-backed Cloud Run worker.
+- Amazon blocked/deferred states and manual CSV fallback are available in the UI/API.
+- Goodreads matching was tightened to avoid accepting title/author mismatches blindly.
+
+Current Google Cloud project prepared during setup:
+
+```text
+pocketfm-jc8ah9
+```
+
+Billing still needs to be linked to that project before Cloud Run, Cloud SQL, Cloud Build, Artifact Registry, Secret Manager, and Cloud Storage can be enabled. Temporary `trycloudflare.com` links are only laptop tunnels. They are useful for a quick preview, but they are not the Google Cloud deployment and they stop working when the laptop, Docker, tunnel process, or internet connection stops.
+
+## Component Overview
+
+The production shape is:
+
+```text
+User browser
+  -> Cloud Run public service
+      -> FastAPI API
+      -> built React/Vite UI served as static files
+      -> Cloud SQL Postgres for runs, books, sources, jobs, and exports
+      -> Cloud Storage for generated export files
+      -> Secret Manager for database password
+  -> Cloud Run worker service
+      -> claims queued jobs from Cloud SQL
+      -> runs Amazon scraping, Goodreads enrichment, tier mapping, exports, and contact enrichment
+```
+
+Local development uses the same application code with lighter state:
+
+```text
+Vite dev server on 127.0.0.1:5173
+  -> FastAPI on 127.0.0.1:8000
+      -> SQLite database in backend/backend_data/
+      -> generated files in backend/generated/
+      -> thread-backed background jobs by default
+```
+
+The frontend never talks directly to Google Cloud services. It calls the backend API. The backend decides whether to use local disk/SQLite or Cloud Storage/Cloud SQL based on environment variables.
 
 ## What The Tool Does
 
@@ -85,7 +136,7 @@ Common export profiles:
 - JSON diagnostic: structured diagnostic rows.
 - XLSX/PDF: available through backend export support.
 
-Generated files are stored locally under `backend/generated/`.
+Generated files are stored locally under `backend/generated/` by default. When `COMMISSIONING_GCS_BUCKET` is set, exports are uploaded to Cloud Storage, the export record stores the `gs://` URI, and downloads stream back through the API.
 
 ## Requirements
 
@@ -146,6 +197,132 @@ Backend health check:
 http://127.0.0.1:8000/api/health
 ```
 
+## Deploying To Google Cloud Run
+
+Cloud Build can build this repo into a container and deploy it to Cloud Run. Cloud Build is the CI/CD builder; Cloud Run is the public hosting runtime.
+
+### Prerequisites
+
+- A Google Cloud project with billing linked.
+- Google Cloud SDK installed and authenticated.
+- Permission to enable APIs, create Cloud SQL, create Cloud Storage buckets, create Secret Manager secrets, and deploy Cloud Run services.
+
+Authenticate:
+
+```text
+gcloud auth login
+gcloud config set project PROJECT_ID
+```
+
+For the new project created during setup, use:
+
+```text
+gcloud config set project pocketfm-jc8ah9
+```
+
+Check billing before deploying:
+
+```text
+gcloud billing projects describe PROJECT_ID
+```
+
+If `billingEnabled` is `false`, link billing in the Google Cloud console first.
+
+### One-command deploy helper
+
+From the repo root:
+
+```text
+.\scripts\deploy_cloud_run.ps1 -ProjectId PROJECT_ID -DbPassword "A_STRONG_DATABASE_PASSWORD"
+```
+
+The helper script:
+
+- Sets the active Google Cloud project.
+- Enables the required APIs.
+- Grants the Cloud Build and Cloud Run service accounts the roles needed by this app.
+- Creates the Artifact Registry Docker repository if missing.
+- Creates the Cloud SQL Postgres instance, database, and user if missing.
+- Stores or rotates the database password in Secret Manager.
+- Creates the Cloud Storage export bucket if missing.
+- Runs Cloud Build with `cloudbuild.yaml`.
+- Prints the public Cloud Run UI/API URL.
+
+The default cloud resources are:
+
+```text
+Region: us-central1
+Artifact Registry repository: pocketfm
+Cloud Run UI/API service: pocketfm-commissioning
+Cloud Run worker service: pocketfm-commissioning-worker
+Cloud SQL instance: pocketfm-postgres
+Cloud SQL database/user: pocketfm
+Secret Manager secret: pocketfm-db-password
+Cloud Storage bucket: PROJECT_ID-pocketfm-exports
+```
+
+The build deploys two Cloud Run services:
+
+- `pocketfm-commissioning`: public UI/API. It queues work in the database.
+- `pocketfm-commissioning-worker`: background worker. It claims queued jobs from Cloud SQL and executes them with concurrency 1.
+
+The Cloud Run deploy uses these durable state variables:
+
+```text
+COMMISSIONING_JOB_BACKEND=database
+CLOUD_SQL_CONNECTION_NAME=PROJECT_ID:us-central1:pocketfm-postgres
+CLOUD_SQL_DATABASE=pocketfm
+CLOUD_SQL_USER=pocketfm
+CLOUD_SQL_PASSWORD=from Secret Manager
+COMMISSIONING_GCS_BUCKET=PROJECT_ID-pocketfm-exports
+```
+
+Amazon scraping note: Cloud Run deploys with `COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK=1`, `AMAZON_DETAIL_WORKERS=1`, and a slower Amazon page delay. When Amazon blocks or rate-limits a source, the job marks that source blocked/deferred instead of attempting manual CAPTCHA clearing.
+
+### Manual deploy commands
+
+The helper script wraps these resources. If a manual deploy is needed, create the resources first:
+
+```text
+gcloud services enable cloudbuild.googleapis.com run.googleapis.com artifactregistry.googleapis.com sqladmin.googleapis.com secretmanager.googleapis.com storage.googleapis.com
+gcloud artifacts repositories create pocketfm --repository-format=docker --location=us-central1
+gcloud sql instances create pocketfm-postgres --database-version=POSTGRES_16 --region=us-central1 --tier=db-custom-1-3840 --storage-size=20GB
+gcloud sql databases create pocketfm --instance=pocketfm-postgres
+gcloud sql users create pocketfm --instance=pocketfm-postgres --password=YOUR_DB_PASSWORD
+gcloud secrets create pocketfm-db-password --data-file=-
+gcloud storage buckets create gs://PROJECT_ID-pocketfm-exports --location=us-central1
+```
+
+Then deploy:
+
+```text
+gcloud builds submit --config cloudbuild.yaml --substitutions="_REGION=us-central1,_REPOSITORY=pocketfm,_SERVICE=pocketfm-commissioning,_WORKER_SERVICE=pocketfm-commissioning-worker,_CLOUD_SQL_INSTANCE=pocketfm-postgres,_CLOUD_SQL_DATABASE=pocketfm,_CLOUD_SQL_USER=pocketfm,_DB_PASSWORD_SECRET=pocketfm-db-password,_GCS_EXPORT_BUCKET_SUFFIX=pocketfm-exports"
+```
+
+### Smoke test after deploy
+
+Run the Cloud Run smoke test after deploy with one small Amazon URL and one Goodreads URL:
+
+```text
+py scripts/cloud_run_smoke.py --base-url https://YOUR_SERVICE_URL --amazon-url "https://www.amazon.com/..." --goodreads-url "https://www.goodreads.com/..."
+```
+
+At minimum, verify:
+
+```text
+https://YOUR_SERVICE_URL/api/health
+```
+
+### Cost and sizing notes
+
+The current `cloudbuild.yaml` favors reliability for a presentation or light production trial:
+
+- UI/API service: 2 CPU, 2Gi memory, `min-instances=1`.
+- Worker service: 2 CPU, 2Gi memory, `min-instances=1`, `max-instances=1`.
+- Cloud SQL: `db-custom-1-3840`, 20GB storage.
+
+That avoids cold starts and keeps a worker alive, but it has an always-on cost. For a cheaper demo, reduce Cloud Run CPU/memory and set `min-instances` to `0`; for heavier production use, keep the current sizing or scale up after real job timings are known.
+
 ## Scripts
 
 Root scripts:
@@ -157,6 +334,7 @@ npm run dev:frontend    # Vite on 127.0.0.1:5173
 npm run build           # frontend build check
 npm run test            # backend unittest suite
 npm run check           # backend tests + frontend build
+npm run start:worker    # process queued DB jobs when COMMISSIONING_JOB_BACKEND=database
 ```
 
 Frontend scripts live in `frontend/package.json`.
@@ -194,7 +372,10 @@ Common settings:
 ```text
 VITE_API_BASE_URL=/api
 COMMISSIONING_JOB_WORKERS=4
-AMAZON_DETAIL_WORKERS=4
+COMMISSIONING_JOB_BACKEND=thread
+COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK=1
+AMAZON_DETAIL_WORKERS=1
+AMAZON_PAGE_DELAY_SECONDS=2.0
 AMAZON_REQUEST_TIMEOUT_SECONDS=25
 AMAZON_REQUEST_RETRIES=2
 GOODREADS_LOOKUP_WORKERS=4
@@ -210,6 +391,22 @@ COMMISSIONING_DATABASE_URL=sqlite:///backend/backend_data/commissioning.db
 ```
 
 If `COMMISSIONING_DATABASE_URL` is blank, the app uses the default local SQLite path.
+
+Cloud SQL Postgres shortcut:
+
+```text
+CLOUD_SQL_CONNECTION_NAME=PROJECT_ID:REGION:INSTANCE
+CLOUD_SQL_DATABASE=pocketfm
+CLOUD_SQL_USER=pocketfm
+CLOUD_SQL_PASSWORD=...
+```
+
+Export storage override:
+
+```text
+COMMISSIONING_GCS_BUCKET=PROJECT_ID-pocketfm-exports
+COMMISSIONING_GCS_PREFIX=commissioning-exports
+```
 
 ## Optional Local Integrations
 
@@ -254,6 +451,7 @@ Core API groups:
 - `/api/bootstrap`: load or create the current workspace run.
 - `/api/batches`: create/list runs.
 - `/api/batches/{batch_id}/sources`: add, replace, and list source URLs.
+- `/api/batches/{batch_id}/imports/csv`: import a manual CSV fallback when Amazon blocks a source.
 - `/api/batches/{batch_id}/jobs/...`: queue scrape/enrichment jobs.
 - `/api/jobs/{job_id}` and `/api/jobs/{job_id}/events`: inspect job status/events.
 - `/api/batches/{batch_id}/books`: list books in a run.
@@ -290,6 +488,32 @@ The test suite covers:
 - Export profiles.
 - Pipeline smoke flows.
 
+## Present Limitations
+
+### Scraping and source reliability
+
+- Amazon and Goodreads can block or rate-limit automated traffic. This tool detects those cases and defers the source instead of trying to bypass CAPTCHA or access controls.
+- Cloud hosting does not make scraping unblockable. It only makes the app public and independent of the laptop.
+- Large Amazon category/search links can take a long time because the cloud configuration intentionally uses low concurrency and slower page delay to reduce blocking.
+- Some Amazon pages may expose incomplete metadata because Amazon markup changes frequently.
+- Goodreads matching is stricter than before, but no title-matching system should be treated as perfect. The app now prefers exact title/author evidence, keeps low-confidence candidates for review, and avoids misleading cross-title matches where possible.
+- For blocked or high-risk sources, use the blocked/deferred dashboard and CSV import fallback. The cleanest long-term solution is an authorized data feed or user-provided export.
+
+### Cloud and operations
+
+- Permanent Google Cloud deployment requires billing to be linked to the project.
+- The current Cloud Run configuration allows unauthenticated public access. Add Cloud Run authentication, Identity-Aware Proxy, or another access gate before sharing sensitive data broadly.
+- Cloud SQL is the main recurring cost. Even low traffic costs money because the database instance is provisioned.
+- The worker currently runs with `max-instances=1` in cloud mode. This is safer for scraping behavior, but it means queued large jobs run one at a time.
+- Database schema management is lightweight. Before a multi-team production rollout, add formal migrations and a backup/restore procedure.
+- The app does not include a full admin/user permission system yet. Workspaces are isolated by workspace id, not by authenticated user accounts.
+
+### Temporary public links
+
+- `trycloudflare.com` links are laptop tunnels. They are not stable deployment URLs.
+- A tunnel link stops working if the laptop sleeps, Docker stops, the tunnel process exits, or the network drops.
+- The proper public URL after cloud deployment will be the Cloud Run service URL printed by the deploy script.
+
 ## Troubleshooting
 
 ### The UI cannot connect to the backend
@@ -317,15 +541,16 @@ Amazon changes markup and may challenge automated requests. Try:
 - Fewer workers.
 - A smaller source URL.
 - Longer request timeouts.
-- Playwright fallback enabled with Chromium installed.
+- Retry later or use an authorized Amazon data source / user-provided CSV when the source is blocked.
 
 Relevant env vars:
 
 ```text
 AMAZON_DETAIL_WORKERS=1
+AMAZON_PAGE_DELAY_SECONDS=2.0
 AMAZON_REQUEST_TIMEOUT_SECONDS=25
 AMAZON_REQUEST_RETRIES=2
-COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK=0
+COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK=1
 ```
 
 ### Goodreads matching is slow

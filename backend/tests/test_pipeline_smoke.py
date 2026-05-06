@@ -154,15 +154,19 @@ class PipelineSmokeTests(unittest.TestCase):
             return records
 
         def fake_enrich(row: dict, scraper):
+            slug = row["Title"].lower().replace(" ", "-")
             return {
-                "Goodread Link": f"https://www.goodreads.com/search?q={row['Author']}+{row['Cleaned Series Name']}",
-                "Series Book 1": "https://www.goodreads.com/book/show/series-book-1",
+                "Goodread Link": f"https://www.goodreads.com/search?q={row['Title']}+{row['Author']}",
+                "Resolved Goodreads Book": f"https://www.goodreads.com/book/show/{slug}",
+                "Series Book 1": "https://www.goodreads.com/book/show/smoke-trail-book-1",
                 "Series Link": "https://www.goodreads.com/series/smoke-trail",
                 "# of primary book": "8",
                 "# of total pages in series": "2541",
                 "GR Book 1 Rating": "4.20",
                 "Goodreads rating": "4.31",
                 "Goodreads no of rating": "6978",
+                "Goodreads Match Status": "matched",
+                "Goodreads Match Confidence": 0.98,
             }
 
         fake_enrich_mock = Mock(side_effect=fake_enrich)
@@ -191,9 +195,10 @@ class PipelineSmokeTests(unittest.TestCase):
         self.assertTrue(any("Found 2 Amazon books" in message for message in event_messages))
         self.assertTrue(any("Fetched Amazon details 1/2" in message for message in event_messages))
         self.assertTrue(any("Amazon core coverage: publisher 2/2" in message for message in event_messages))
-        self.assertEqual(fake_enrich_mock.call_count, 1)
+        self.assertEqual(fake_enrich_mock.call_count, 2)
         self.assertEqual(len(books), 2)
         self.assertTrue(all(book.goodread_link for book in books))
+        self.assertNotEqual(books[0].goodread_link, books[1].goodread_link)
         self.assertTrue(all(book.genre == "Thriller" for book in books))
         self.assertTrue(all(book.sub_genre == "Domestic Thrillers" for book in books))
         self.assertTrue(all(book.book_type == "Series" for book in books))

@@ -14,8 +14,11 @@ if str(BACKEND_DIR) not in sys.path:
 from commissioning.services.amazon_http import (  # noqa: E402
     AmazonDetail,
     AmazonItem,
+    AmazonRateLimitedError,
     AmazonScrapeError,
     clean_amazon_value,
+    _detect_block,
+    _fetch,
     discover_amazon_items,
     discover_amazon_records,
     fetch_amazon_detail,
@@ -134,6 +137,54 @@ NORMAL_SEARCH_PAGE = """
 
 
 class AmazonHttpParserTests(unittest.TestCase):
+    def test_interstitial_verify_page_is_detected_as_block(self):
+        html = """
+        <html><head>
+          <meta http-equiv="refresh" content="5; URL='/s?x=1&bm-verify=AAQAAA'" />
+          <script>function triggerInterstitialChallenge(){}</script>
+        </head><body><iframe src="https://m.media-amazon.com/images/S/sash/check.gif"></iframe></body></html>
+        """
+
+        self.assertIn("bm-verify", _detect_block(html))
+
+    def test_fetch_classifies_429_with_retry_after(self):
+        class FakeResponse:
+            status_code = 429
+            headers = {"Retry-After": "9"}
+            text = "too many requests"
+
+            def raise_for_status(self):
+                raise AssertionError("status-specific branch should run first")
+
+        class FakeSession:
+            def get(self, url: str, timeout: float, allow_redirects: bool):
+                self.url = url
+                self.timeout = timeout
+                self.allow_redirects = allow_redirects
+                return FakeResponse()
+
+        with (
+            patch("commissioning.services.amazon_http._session", return_value=FakeSession()),
+            patch("commissioning.services.amazon_http.REQUEST_RETRIES", 0),
+        ):
+            with self.assertRaises(AmazonRateLimitedError) as ctx:
+                _fetch("https://www.amazon.com/s?k=thriller")
+
+        self.assertEqual(ctx.exception.status_code, 429)
+        self.assertEqual(ctx.exception.retry_after, 9)
+
+    def test_rate_limited_detail_is_deferred_not_silently_empty(self):
+        with patch(
+            "commissioning.services.amazon_http._fetch_detail_html",
+            side_effect=AmazonRateLimitedError("https://www.amazon.com/dp/B0BAD00001", 503, 15),
+        ):
+            detail = fetch_amazon_detail("https://www.amazon.com/dp/B0BAD00001")
+
+        self.assertIsNotNone(detail)
+        assert detail is not None
+        self.assertIn("detail_deferred_rate_limited", detail.amazon_quality_flags)
+        self.assertEqual(detail.raw_values["deferred_reason"], "Amazon returned HTTP 503 for https://www.amazon.com/dp/B0BAD00001; retry after 15s")
+
     def test_search_parser_reads_raw_html_cards_and_constructs_page_two(self):
         seen_urls = []
 

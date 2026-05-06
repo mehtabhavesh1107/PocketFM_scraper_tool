@@ -127,11 +127,13 @@ def _lead_author(author: str | None, contributors: list[dict] | None = None) -> 
 
 
 def _goodreads_cache_key(book: Book) -> str:
-    series = _key_part(book.cleaned_series_name or book.part_of_series)
+    title = _key_part(_clean_title_for_lookup(book.title))
     author = _key_part(book.clean_author_names or book.author)
-    if series and author:
-        return f"series:{series}|author:{author}"
-    return f"book:{_key_part(_clean_title_for_lookup(book.title))}|author:{author}"
+    amazon = (book.provenance_json or {}).get("amazon", {})
+    amazon = amazon if isinstance(amazon, dict) else {}
+    isbn = _key_part(amazon.get("isbn_13") or amazon.get("isbn_10") or "")
+    asin = _key_part(amazon.get("detail_asin") or amazon.get("source_asin") or "")
+    return f"book:{title}|author:{author}|isbn:{isbn}|asin:{asin}"
 
 
 def _goodreads_row(book: Book) -> dict:
@@ -187,9 +189,32 @@ def _upsert_book(session: Session, batch_id: int, record: dict, source_type: str
     book.format = record.get("format") or book.format
     book.synopsis = record.get("synopsis") or book.synopsis
     book.genre = record.get("genre") or book.genre
+    book.sub_genre = record.get("sub_genre") or book.sub_genre
     book.cleaned_series_name = record.get("cleaned_series_name") or book.cleaned_series_name
     book.series_flag = record.get("series_flag") or book.series_flag
     book.goodread_link = record.get("goodread_link") or book.goodread_link
+    for field in (
+        "total_pages_in_series",
+        "total_word_count",
+        "total_hours",
+        "tier",
+        "gr_ratings",
+        "trope",
+        "length",
+        "mg_min",
+        "mg_max",
+        "rev_share_min",
+        "rev_share_max",
+        "series_book_1",
+        "series_link",
+        "remarks",
+        "primary_book_count",
+        "final_list",
+        "rationale",
+    ):
+        value = record.get(field)
+        if value not in (None, ""):
+            setattr(book, field, str(value))
     book.goodreads_rating = str(record.get("goodreads_rating") or book.goodreads_rating or "")
     book.goodreads_rating_count = str(record.get("goodreads_rating_count") or book.goodreads_rating_count or "")
     lead_author = _lead_author(author, record.get("contributors") if isinstance(record.get("contributors"), list) else None)
@@ -500,6 +525,7 @@ def _run_scrape_job(job_id: str, batch_id: int, *, auto_goodreads: bool) -> None
         logger.event("info", f"Processing {len(source_links)} source links.", progress_total=max(len(source_links), 1))
         discovered_total = 0
         empty_sources: list[str] = []
+        blocked_sources: list[str] = []
         failed_sources: list[str] = []
         for idx, source in enumerate(source_links, start=1):
             try:
@@ -541,18 +567,30 @@ def _run_scrape_job(job_id: str, batch_id: int, *, auto_goodreads: bool) -> None
                 del records
                 gc.collect()
             except Exception as exc:
-                source.status = "failed"
-                failed_sources.append(f"{source.url}: {exc}")
+                error_text = str(exc)
+                is_blocked = source.source_type == "amazon" and (
+                    "rate-limited" in error_text.lower()
+                    or "anti-bot" in error_text.lower()
+                    or "captcha" in error_text.lower()
+                    or "blocked" in error_text.lower()
+                )
+                source.status = "blocked" if is_blocked else "failed"
+                if is_blocked:
+                    blocked_sources.append(f"{source.url}: {exc}")
+                else:
+                    failed_sources.append(f"{source.url}: {exc}")
                 db.commit()
                 logger.event(
                     "warning",
-                    f"Source {source.id} failed: {exc}",
+                    f"Source {source.id} {'blocked/deferred' if is_blocked else 'failed'}: {exc}",
                     progress_current=idx,
                     progress_total=len(source_links),
-                    failure_bucket="source_discovery_failed",
+                    failure_bucket="source_blocked" if is_blocked else "source_discovery_failed",
                     payload={"source_id": source.id, "url": source.url, "error": str(exc)},
                 )
         completion_bits = [f"Scrape job completed. Discovered {discovered_total} books."]
+        if blocked_sources:
+            completion_bits.append(f"{len(blocked_sources)} Amazon source(s) were blocked/rate-limited and left deferred.")
         if failed_sources:
             completion_bits.append(f"{len(failed_sources)} source(s) failed.")
         if empty_sources:

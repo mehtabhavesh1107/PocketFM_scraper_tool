@@ -114,6 +114,9 @@ button { border: 0; }
 .btn-sm { padding:5px 10px;font-size:12px;border-radius:7px; }
 .btn-xs { padding:3px 8px;font-size:11px;border-radius:6px; }
 .full-btn { width:100%;justify-content:center;margin-top:6px; }
+.icon-btn { width:28px;height:28px;border:0.5px solid #d3d1c7;border-radius:8px;background:#fff;color:var(--g600);display:inline-flex;align-items:center;justify-content:center;cursor:pointer;transition:background 0.12s,color 0.12s,border-color 0.12s;flex-shrink:0; }
+.icon-btn:hover { background:var(--g50);color:#1a1a18;border-color:var(--g400); }
+.icon-btn:disabled { opacity:.35;cursor:not-allowed; }
 
 input[type=text], input[type=url], input[type=email], input[type=number], select, textarea {
   width:100%;padding:7px 11px;border:0.5px solid #d3d1c7;border-radius:8px;font-size:13px;background:#fafaf8;color:#1a1a18;outline:none;transition:border-color 0.12s;font-family:inherit;
@@ -185,9 +188,21 @@ label.field-label { font-size:11px;color:var(--g600);display:block;margin-bottom
 .link-num { width:22px;height:22px;background:var(--g50);color:var(--g800);border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:500;flex-shrink:0; }
 .link-status { width:8px;height:8px;border-radius:50%;background:#d3d1c7;flex-shrink:0; }
 .link-status.ok { background:#1D9E75; }
+.link-row input { min-width:0; }
+.link-remove { color:var(--g400); }
 .source-dot { width:8px;height:8px;border-radius:50%;display:inline-block; }
 .source-dot.amazon { background:var(--a800); }
 .source-dot.goodreads { background:var(--t600); }
+.source-count { font-size:10px;color:var(--g600);background:var(--g50);border-radius:999px;padding:2px 7px;white-space:nowrap; }
+.source-status-pill { flex-shrink:0;border:0.5px solid #d3d1c7;border-radius:999px;background:#fff;padding:2px 7px;font-size:10px;color:var(--g600);text-transform:capitalize;white-space:nowrap;max-width:96px;overflow:hidden;text-overflow:ellipsis; }
+.source-status-pill.processed { color:#0c6b4e;border-color:#b8dfd0;background:#eefaf5; }
+.source-status-pill.blocked,.source-status-pill.failed { color:#8c3b0b;border-color:#efc39d;background:#fff4e8; }
+.source-status-pill.empty { color:#7b651a;border-color:#e6d58f;background:#fff9d6; }
+.blocked-dashboard { margin-top:12px; }
+.blocked-dashboard-grid { display:grid;grid-template-columns:minmax(0,1fr) 260px;gap:12px;align-items:stretch; }
+.blocked-source-row { display:grid;grid-template-columns:auto minmax(0,1fr);gap:8px;align-items:center;border-top:0.5px solid #f1efe8;padding:8px 0;font-size:12px;color:var(--g600); }
+.blocked-source-row span:last-child { overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.upload-zone-compact { padding:14px 12px;min-height:112px;display:flex;flex-direction:column;justify-content:center; }
 .source-options { margin-top:12px;display:flex;align-items:center;gap:10px; }
 .source-options select { width:auto;padding:5px 10px;font-size:12px; }
 .source-options input { width:70px;padding:5px 8px;font-size:12px; }
@@ -312,6 +327,9 @@ input[type=range] { flex:1;accent-color:var(--p600);height:18px; }
 
 .data-quality-card { margin-top:1rem; }
 .quality-summary-grid { display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin:10px 0; }
+.quality-summary { border:0.5px solid #e0ddd4;border-radius:8px;background:#fff;padding:10px; }
+.quality-summary strong { display:block;font-size:20px;font-weight:600;color:#1a1a18;line-height:1; }
+.quality-summary span { display:block;margin-top:5px;font-size:11px;color:var(--g500); }
 .quality-chips { display:flex;gap:6px;flex-wrap:wrap;margin-bottom:12px; }
 .quality-chip { border:0.5px solid #e0ddd4;border-radius:999px;background:#fff;padding:4px 9px;font-size:11px;color:var(--g600); }
 .quality-split { display:grid;grid-template-columns:1.4fr .8fr;gap:14px; }
@@ -355,7 +373,7 @@ hr { border:none;border-top:0.5px solid #e0ddd4;margin:1.25rem 0; }
 @media (max-width: 1080px) {
   :root { --sidebar: 200px; }
   .metrics, .pipeline-stages, .highlight-row { grid-template-columns:repeat(2,1fr); }
-  .dashboard-grid, .two-panel, .benchmark-layout, .outreach-layout, .quality-split { grid-template-columns:1fr; }
+  .dashboard-grid, .two-panel, .benchmark-layout, .outreach-layout, .quality-split, .blocked-dashboard-grid { grid-template-columns:1fr; }
   .four-col, .three-col { grid-template-columns:1fr 1fr; }
 }
 

@@ -9,6 +9,7 @@
     "dev:frontend": "cd frontend && npm run dev -- --host 127.0.0.1 --port 5173",
     "build": "npm --prefix frontend run build",
     "start:backend": "cd backend && py -m uvicorn app:app --host 127.0.0.1 --port 8000",
+    "start:worker": "cd backend && py -m commissioning.jobs.worker",
     "start:frontend": "cd frontend && npm run dev -- --host 127.0.0.1 --port 5173",
     "test": "py -m unittest discover -s backend\\tests -v",
     "check": "npm run test && npm run build"

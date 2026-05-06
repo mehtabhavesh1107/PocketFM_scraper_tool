@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+from urllib.parse import quote
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 REPO_DIR = BACKEND_DIR.parent
@@ -20,6 +21,20 @@ GENERATED_DIR = _path_from_env("COMMISSIONING_GENERATED_DIR", DEFAULT_GENERATED_
 DATABASE_PATH = DATA_DIR / "commissioning.db"
 
 
+def _cloud_sql_database_url() -> str:
+    connection_name = os.getenv("CLOUD_SQL_CONNECTION_NAME", "").strip()
+    database = os.getenv("CLOUD_SQL_DATABASE", "").strip()
+    user = os.getenv("CLOUD_SQL_USER", "").strip()
+    password = os.getenv("CLOUD_SQL_PASSWORD", "")
+    if not all([connection_name, database, user]):
+        return ""
+    host = quote(f"/cloudsql/{connection_name}", safe="")
+    return (
+        f"postgresql+psycopg2://{quote(user, safe='')}:"
+        f"{quote(password, safe='')}@/{quote(database, safe='')}?host={host}"
+    )
+
+
 def _database_url() -> str:
     url = (
         os.getenv("COMMISSIONING_DATABASE_URL")
@@ -27,6 +42,7 @@ def _database_url() -> str:
         or os.getenv("POSTGRES_URL")
         or os.getenv("POSTGRES_PRISMA_URL")
         or os.getenv("POSTGRES_URL_NON_POOLING")
+        or _cloud_sql_database_url()
         or f"sqlite:///{DATABASE_PATH.as_posix()}"
     )
     if url.startswith("postgres://"):
@@ -41,6 +57,9 @@ DEFAULT_SHEET_URL = os.getenv(
 ).strip()
 DEFAULT_WORKSHEET_NAME = os.getenv("COMMISSIONING_GOOGLE_WORKSHEET", "Copy of All Data").strip()
 ALLOWED_ORIGINS = [origin.strip() for origin in os.getenv("COMMISSIONING_ALLOWED_ORIGINS", "*").split(",") if origin.strip()]
+JOB_BACKEND = os.getenv("COMMISSIONING_JOB_BACKEND", "thread").strip().lower()
+GCS_EXPORT_BUCKET = os.getenv("COMMISSIONING_GCS_BUCKET", "").strip()
+GCS_EXPORT_PREFIX = os.getenv("COMMISSIONING_GCS_PREFIX", "commissioning-exports").strip().strip("/")
 
 BOOK_SHEET_COLUMN_MAP = {
     "title": "Title",
