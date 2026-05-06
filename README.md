@@ -293,7 +293,7 @@ Cloud Storage bucket: PROJECT_ID-pocketfm-exports
 The build deploys two Cloud Run services:
 
 - `pocketfm-commissioning`: public UI/API. It queues work in the database.
-- `pocketfm-commissioning-worker`: background worker. It claims queued jobs from Cloud SQL and executes them with concurrency 1.
+- `pocketfm-commissioning-worker`: background worker. It claims queued jobs from Cloud SQL and executes them with concurrency 1 per instance. Amazon product detail fetching is split into per-book child jobs, so two worker instances can make large source runs modestly faster without increasing per-instance request pressure.
 
 The Cloud Run deploy uses these durable state variables:
 
@@ -306,7 +306,7 @@ CLOUD_SQL_PASSWORD=from Secret Manager
 COMMISSIONING_GCS_BUCKET=PROJECT_ID-pocketfm-exports
 ```
 
-Amazon scraping note: Cloud Run deploys with `COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK=1`, `AMAZON_DETAIL_WORKERS=1`, and a slower Amazon page delay. When Amazon blocks or rate-limits a source, the job marks that source blocked/deferred instead of attempting manual CAPTCHA clearing.
+Amazon scraping note: Cloud Run deploys with `COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK=1`, `COMMISSIONING_DISTRIBUTED_AMAZON_DETAILS=1`, `AMAZON_DETAIL_WORKERS=1`, `AMAZON_DETAIL_ITEM_DELAY_SECONDS=1.0`, and a slower Amazon page delay. Source discovery remains cautious; only product detail pages are split into per-book child jobs. When Amazon blocks or rate-limits a source, the job marks that source blocked/deferred instead of attempting manual CAPTCHA clearing.
 
 ### Manual deploy commands
 
@@ -347,7 +347,7 @@ https://YOUR_SERVICE_URL/api/health
 The current `cloudbuild.yaml` favors reliability for a presentation or light production trial:
 
 - UI/API service: 2 CPU, 2Gi memory, `min-instances=1`.
-- Worker service: 2 CPU, 2Gi memory, `min-instances=1`, `max-instances=1`.
+- Worker service: 2 CPU, 2Gi memory, `min-instances=2`, `max-instances=2`.
 - Cloud SQL: `db-custom-1-3840`, 20GB storage.
 
 That avoids cold starts and keeps a worker alive, but it has an always-on cost. For a cheaper demo, reduce Cloud Run CPU/memory and set `min-instances` to `0`; for heavier production use, keep the current sizing or scale up after real job timings are known.
@@ -403,7 +403,10 @@ VITE_API_BASE_URL=/api
 COMMISSIONING_JOB_WORKERS=4
 COMMISSIONING_JOB_BACKEND=thread
 COMMISSIONING_DISABLE_PLAYWRIGHT_FALLBACK=1
+COMMISSIONING_DISTRIBUTED_AMAZON_DETAILS=1
+COMMISSIONING_CHILD_JOB_FALLBACK_AFTER_SECONDS=3.0
 AMAZON_DETAIL_WORKERS=1
+AMAZON_DETAIL_ITEM_DELAY_SECONDS=1.0
 AMAZON_PAGE_DELAY_SECONDS=2.0
 AMAZON_REQUEST_TIMEOUT_SECONDS=25
 AMAZON_REQUEST_RETRIES=2
@@ -526,7 +529,7 @@ The test suite covers:
 
 - Amazon and Goodreads can block or rate-limit automated traffic. This tool detects those cases and defers the source instead of trying to bypass CAPTCHA or access controls.
 - Cloud hosting does not make scraping unblockable. It only makes the app public and independent of the laptop.
-- Large Amazon category/search links can take a long time because the cloud configuration intentionally uses low concurrency and slower page delay to reduce blocking.
+- Large Amazon category/search links can still take time because source discovery remains low-concurrency to reduce blocking. Product detail pages are distributed as per-book child jobs so a second worker can improve throughput modestly while using the same detail parser and retry logic.
 - Some Amazon pages may expose incomplete metadata because Amazon markup changes frequently.
 - Goodreads matching is stricter than before, but no title-matching system should be treated as perfect. The app now prefers exact title/author evidence, keeps low-confidence candidates for review, and avoids misleading cross-title matches where possible.
 - Contact discovery uses public web search and public pages. It can still miss authors with no public email, blocked websites, JavaScript-only contact forms, or ambiguous pen names, so the Contact Details Mapping tab keeps all results editable and filterable.
@@ -537,7 +540,7 @@ The test suite covers:
 - Permanent Google Cloud deployment requires billing to be linked to the project.
 - The current Cloud Run configuration allows unauthenticated public access. Add Cloud Run authentication, Identity-Aware Proxy, or another access gate before sharing sensitive data broadly.
 - Cloud SQL is the main recurring cost. Even low traffic costs money because the database instance is provisioned.
-- The worker currently runs with `max-instances=1` in cloud mode. This is safer for scraping behavior, but it means queued large jobs run one at a time.
+- The worker currently runs with `min-instances=2` and `max-instances=2` in cloud mode. That gives one parent scrape orchestrator plus one detail worker most of the time; the parent can also run child detail jobs after a short fallback delay if no worker is available.
 - Database schema management is lightweight. Before a multi-team production rollout, add formal migrations and a backup/restore procedure.
 - The app does not include a full admin/user permission system yet. Workspaces are isolated by workspace id, not by authenticated user accounts.
 

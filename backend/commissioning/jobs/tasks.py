@@ -4,6 +4,7 @@ import os
 import re
 import threading
 import gc
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 
@@ -11,6 +12,7 @@ from sqlalchemy.orm import Session
 
 from ..db import SessionLocal
 from ..models import Batch, Book, BookSource, Contact, Job, JobEvent, SourceLink
+from ..services.amazon_http import amazon_item_to_payload, discover_amazon_items, fetch_amazon_item_record
 from ..services.contact_service import enrich_book_contacts
 from ..services.discovery_service import discover_books
 from ..services.export_service import generate_export
@@ -29,6 +31,24 @@ def _env_int(name: str, default: int, *, minimum: int = 1, maximum: int = 16) ->
 GOODREADS_LOOKUP_WORKERS = _env_int("GOODREADS_LOOKUP_WORKERS", 4, maximum=12)
 GOODREADS_GC_EVERY = _env_int("GOODREADS_GC_EVERY", 5, minimum=1, maximum=50)
 ASIN_TEXT_RE = re.compile(r"^[A-Z0-9]{10}$", re.IGNORECASE)
+
+
+def _env_float(name: str, default: float, *, minimum: float = 0.0, maximum: float = 60.0) -> float:
+    try:
+        value = float(os.getenv(name, str(default)))
+    except ValueError:
+        value = default
+    return max(minimum, min(value, maximum))
+
+
+DISTRIBUTED_AMAZON_DETAILS = os.getenv("COMMISSIONING_DISTRIBUTED_AMAZON_DETAILS", "1").strip().lower() not in {
+    "0",
+    "false",
+    "no",
+}
+AMAZON_DETAIL_ITEM_DELAY_SECONDS = _env_float("AMAZON_DETAIL_ITEM_DELAY_SECONDS", 1.0, maximum=10.0)
+CHILD_JOB_FALLBACK_AFTER_SECONDS = _env_float("COMMISSIONING_CHILD_JOB_FALLBACK_AFTER_SECONDS", 3.0, maximum=30.0)
+CHILD_JOB_STAGE = "amazon_detail_item"
 
 
 class JobLogger:
@@ -513,6 +533,220 @@ def _coverage_message(summary: dict) -> str:
     )
 
 
+def _child_stats(db: Session, child_job_ids: list[str]) -> dict[str, int]:
+    if not child_job_ids:
+        return {"total": 0, "completed": 0, "failed": 0, "running": 0, "queued": 0}
+    rows = db.query(Job.status).filter(Job.id.in_(child_job_ids)).all()
+    stats = {"total": len(child_job_ids), "completed": 0, "failed": 0, "running": 0, "queued": 0}
+    for (status,) in rows:
+        if status in stats:
+            stats[status] += 1
+    return stats
+
+
+def _parent_checkpoint(job: Job) -> dict:
+    checkpoint = dict(job.checkpoint_json or {})
+    checkpoint.setdefault("child_job_ids", [])
+    return checkpoint
+
+
+def _update_parent_from_children(db: Session, parent_job_id: str, *, message: str | None = None) -> None:
+    parent = db.get(Job, parent_job_id)
+    if parent is None or parent.status not in {"queued", "running"}:
+        return
+    checkpoint = _parent_checkpoint(parent)
+    child_job_ids = list(checkpoint.get("child_job_ids") or [])
+    stats = _child_stats(db, child_job_ids)
+    parent.progress_current = stats["completed"] + stats["failed"]
+    parent.progress_total = max(stats["total"], 1)
+    parent.progress_percent = round((parent.progress_current / parent.progress_total) * 100, 2)
+    parent.message = message or (
+        f"Fetched Amazon details {parent.progress_current}/{stats['total']} "
+        f"({stats['failed']} failed/deferred)."
+    )
+    db.add(
+        JobEvent(
+            job_id=parent.id,
+            level="info" if not stats["failed"] else "warning",
+            message=parent.message,
+            payload_json={"child_stats": stats},
+            progress_percent=parent.progress_percent,
+        )
+    )
+    db.commit()
+
+
+def _queue_amazon_detail_jobs(
+    db: Session,
+    *,
+    parent_job: Job,
+    batch_id: int,
+    source: SourceLink,
+    items: list,
+) -> list[Job]:
+    child_jobs: list[Job] = []
+    total = len(items)
+    for index, item in enumerate(items, start=1):
+        child = Job(
+            batch_id=batch_id,
+            stage=CHILD_JOB_STAGE,
+            status="queued",
+            message=f"Amazon detail queued {index}/{total}: {item.asin or item.title}",
+            payload_json={
+                "parent_job_id": parent_job.id,
+                "source_id": source.id,
+                "source_url": source.url,
+                "source_type": source.source_type,
+                "item_index": index,
+                "item_total": total,
+                "item": amazon_item_to_payload(item),
+            },
+        )
+        db.add(child)
+        child_jobs.append(child)
+    checkpoint = _parent_checkpoint(parent_job)
+    db.flush()
+    checkpoint["child_job_ids"] = [child.id for child in child_jobs]
+    checkpoint["distributed_amazon_details"] = True
+    parent_job.checkpoint_json = checkpoint
+    db.commit()
+    for child in child_jobs:
+        db.refresh(child)
+    return child_jobs
+
+
+def _submit_inline_child_jobs(child_jobs: list[Job], batch_id: int) -> bool:
+    from .manager import job_manager
+
+    if not job_manager.runs_inline:
+        return False
+    max_workers = getattr(job_manager.executor, "_max_workers", 1) if job_manager.executor is not None else 1
+    if max_workers <= 1:
+        return False
+    for child in child_jobs:
+        job_manager.submit(child.id, run_amazon_detail_item_job, child.id, batch_id)
+    return True
+
+
+def _claim_next_child_job(db: Session, child_job_ids: list[str]) -> str | None:
+    if not child_job_ids:
+        return None
+    child = (
+        db.query(Job)
+        .filter(Job.id.in_(child_job_ids), Job.status == "queued", Job.stage == CHILD_JOB_STAGE)
+        .order_by(Job.created_at.asc())
+        .first()
+    )
+    if child is None:
+        return None
+    child.status = "running"
+    child.message = "Claimed by parent scrape orchestrator."
+    db.add(
+        JobEvent(
+            job_id=child.id,
+            level="info",
+            message=child.message,
+            payload_json={"claimed_by": "parent_orchestrator"},
+            progress_percent=child.progress_percent,
+        )
+    )
+    db.commit()
+    return child.id
+
+
+def _wait_for_amazon_detail_jobs(db: Session, logger: JobLogger, child_jobs: list[Job], batch_id: int) -> dict[str, int]:
+    child_job_ids = [child.id for child in child_jobs]
+    if not child_job_ids:
+        return {"total": 0, "completed": 0, "failed": 0, "running": 0, "queued": 0}
+
+    inline_children_submitted = _submit_inline_child_jobs(child_jobs, batch_id)
+    last_progress = -1
+    fallback_started_at = time.monotonic()
+    while True:
+        stats = _child_stats(db, child_job_ids)
+        done = stats["completed"] + stats["failed"]
+        if done != last_progress:
+            last_progress = done
+            logger.event(
+                "info" if stats["failed"] == 0 else "warning",
+                f"Fetched Amazon details {done}/{stats['total']} ({stats['failed']} failed/deferred).",
+                progress_current=done,
+                progress_total=stats["total"],
+                payload={"child_stats": stats},
+            )
+        if done >= stats["total"]:
+            return stats
+
+        # Database-backed deployments need more than one worker for true parallelism.
+        # This fallback prevents a one-worker demo from deadlocking while other workers
+        # still get first chance to claim queued detail jobs.
+        if not inline_children_submitted and time.monotonic() - fallback_started_at >= CHILD_JOB_FALLBACK_AFTER_SECONDS:
+            claimed_child_id = _claim_next_child_job(db, child_job_ids)
+            if claimed_child_id:
+                run_amazon_detail_item_job(claimed_child_id, batch_id)
+                continue
+        time.sleep(0.75)
+
+
+def _distributed_amazon_source(
+    db: Session,
+    logger: JobLogger,
+    *,
+    parent_job: Job,
+    batch_id: int,
+    source: SourceLink,
+) -> dict[str, int]:
+    items = discover_amazon_items(source.url, max_results=0)
+    total = len(items)
+    logger.event(
+        "info",
+        f"Found {total} Amazon books. Queuing product detail workers...",
+        progress_current=0,
+        progress_total=max(total, 1),
+        payload={"source_id": source.id, "source_type": source.source_type, "item_total": total},
+    )
+    if not items:
+        return {"total": 0, "completed": 0, "failed": 0, "running": 0, "queued": 0}
+    child_jobs = _queue_amazon_detail_jobs(db, parent_job=parent_job, batch_id=batch_id, source=source, items=items)
+    return _wait_for_amazon_detail_jobs(db, logger, child_jobs, batch_id)
+
+
+def run_amazon_detail_item_job(job_id: str, batch_id: int) -> None:
+    db = SessionLocal()
+    job = db.get(Job, job_id)
+    logger = JobLogger(db, job)
+    try:
+        payload = dict(job.payload_json or {})
+        item_payload = payload.get("item") if isinstance(payload.get("item"), dict) else {}
+        item_index = int(payload.get("item_index") or 0)
+        item_total = int(payload.get("item_total") or 0)
+        parent_job_id = str(payload.get("parent_job_id") or "")
+        source_url = str(payload.get("source_url") or "")
+
+        logger.start(f"Fetching Amazon details {item_index}/{item_total}.")
+        if AMAZON_DETAIL_ITEM_DELAY_SECONDS:
+            stagger = (sum(ord(char) for char in job_id[-6:]) % 400) / 1000
+            time.sleep(AMAZON_DETAIL_ITEM_DELAY_SECONDS + stagger)
+        record = fetch_amazon_item_record(item_payload)
+        book = _upsert_book(db, batch_id, record, "amazon", source_url)
+        title = record.get("title") or record.get("amazon_url") or "Amazon book"
+        logger.finish(f"Fetched Amazon details {item_index}/{item_total}: {title}")
+        if parent_job_id:
+            _update_parent_from_children(
+                db,
+                parent_job_id,
+                message=f"Fetched Amazon details {item_index}/{item_total}: {title}",
+            )
+        del book
+    except Exception as exc:
+        logger.fail(f"Amazon detail item failed: {exc}", failure_bucket="amazon_detail_item_failed")
+        parent_job_id = str((job.payload_json or {}).get("parent_job_id") or "") if job else ""
+        if parent_job_id:
+            _update_parent_from_children(db, parent_job_id)
+    finally:
+        db.close()
+
+
 def _run_scrape_job(job_id: str, batch_id: int, *, auto_goodreads: bool) -> None:
     db = SessionLocal()
     job = db.get(Job, job_id)
@@ -529,31 +763,46 @@ def _run_scrape_job(job_id: str, batch_id: int, *, auto_goodreads: bool) -> None
         failed_sources: list[str] = []
         for idx, source in enumerate(source_links, start=1):
             try:
-                def source_progress(item_index: int, item_total: int, record: dict | None) -> None:
-                    if source.source_type != "amazon" or item_total <= 0:
-                        return
-                    if item_index <= 0:
-                        message = f"Found {item_total} Amazon books. Fetching product details..."
+                if source.source_type == "amazon" and DISTRIBUTED_AMAZON_DETAILS:
+                    source.status = "processing"
+                    db.commit()
+                    stats = _distributed_amazon_source(db, logger, parent_job=job, batch_id=batch_id, source=source)
+                    record_count = stats["completed"]
+                    if record_count:
+                        source.status = "processed"
+                    elif stats["total"] and stats["failed"]:
+                        source.status = "failed"
+                        failed_sources.append(f"{source.url}: all Amazon detail workers failed")
                     else:
-                        title = (record or {}).get("title") or (record or {}).get("amazon_url") or "Amazon book"
-                        message = f"Fetched Amazon details {item_index}/{item_total}: {title}"
-                    logger.event(
-                        "info",
-                        message,
-                        progress_current=item_index,
-                        progress_total=item_total,
-                        payload={"source_id": source.id, "source_type": source.source_type, "item_total": item_total},
-                    )
-
-                records = discover_books(source.source_type, source.url, 0, on_progress=source_progress)
-                if records:
-                    source.status = "processed"
+                        source.status = "empty"
+                        empty_sources.append(source.url)
                 else:
-                    source.status = "empty"
-                    empty_sources.append(source.url)
-                record_count = len(records)
-                for record in records:
-                    _upsert_book(db, batch_id, record, source.source_type, source.url)
+                    def source_progress(item_index: int, item_total: int, record: dict | None) -> None:
+                        if source.source_type != "amazon" or item_total <= 0:
+                            return
+                        if item_index <= 0:
+                            message = f"Found {item_total} Amazon books. Fetching product details..."
+                        else:
+                            title = (record or {}).get("title") or (record or {}).get("amazon_url") or "Amazon book"
+                            message = f"Fetched Amazon details {item_index}/{item_total}: {title}"
+                        logger.event(
+                            "info",
+                            message,
+                            progress_current=item_index,
+                            progress_total=item_total,
+                            payload={"source_id": source.id, "source_type": source.source_type, "item_total": item_total},
+                        )
+
+                    records = discover_books(source.source_type, source.url, 0, on_progress=source_progress)
+                    if records:
+                        source.status = "processed"
+                    else:
+                        source.status = "empty"
+                        empty_sources.append(source.url)
+                    record_count = len(records)
+                    for record in records:
+                        _upsert_book(db, batch_id, record, source.source_type, source.url)
+                    del records
                 discovered_total += record_count
                 logger.event(
                     "info" if record_count else "warning",
@@ -564,7 +813,7 @@ def _run_scrape_job(job_id: str, batch_id: int, *, auto_goodreads: bool) -> None
                     payload={"source_id": source.id, "discovered": record_count, "url": source.url},
                     failure_bucket="" if record_count else "source_returned_empty",
                 )
-                del records
+                db.commit()
                 gc.collect()
             except Exception as exc:
                 error_text = str(exc)

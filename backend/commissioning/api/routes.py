@@ -103,7 +103,11 @@ def _get_job_or_404(db: Session, job_id: str, workspace_id: str) -> Job:
 def _active_job_for_batch(db: Session, batch_id: int) -> Job | None:
     return (
         db.query(Job)
-        .filter(Job.batch_id == batch_id, Job.status.in_(("queued", "running")))
+        .filter(
+            Job.batch_id == batch_id,
+            Job.status.in_(("queued", "running")),
+            Job.stage.in_(("scrape", "fast_scrape", "enrich_goodreads", "enrich_contacts")),
+        )
         .order_by(Job.created_at.desc())
         .first()
     )

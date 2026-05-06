@@ -20,6 +20,7 @@ os.environ["COMMISSIONING_DATABASE_URL"] = f"sqlite:///{(TEST_ROOT / 'backend_da
 from commissioning.db import SessionLocal, engine, init_db
 from commissioning.jobs.tasks import run_fast_scrape_job, run_scrape_job
 from commissioning.models import Base, Batch, Book, ExportRecord, Job, JobEvent, SourceLink
+from commissioning.services.amazon_http import AmazonItem
 from commissioning.services.export_service import SAMPLE_COMPATIBLE_COLUMNS
 
 
@@ -143,15 +144,25 @@ class PipelineSmokeTests(unittest.TestCase):
             },
         ]
 
-        def fake_discover(source_type: str, url: str, max_results: int, *, on_progress=None):
-            self.assertEqual(source_type, "amazon")
+        items = [
+            AmazonItem(
+                asin=record["source_asin"],
+                title=record["title"],
+                author=record["author"],
+                url=record["source_payload"].get("source_url") or record["url"],
+                raw={"source": "test"},
+            )
+            for record in records
+        ]
+        records_by_asin = {record["source_asin"]: record for record in records}
+
+        def fake_discover_items(url: str, max_results: int = 0):
             self.assertEqual(max_results, 0)
             self.assertIn("asins=", url)
-            if on_progress:
-                on_progress(0, len(records), None)
-                for index, record in enumerate(records, start=1):
-                    on_progress(index, len(records), record)
-            return records
+            return items
+
+        def fake_fetch_item_record(item_payload: dict):
+            return records_by_asin[item_payload["asin"]]
 
         def fake_enrich(row: dict, scraper):
             slug = row["Title"].lower().replace(" ", "-")
@@ -172,7 +183,8 @@ class PipelineSmokeTests(unittest.TestCase):
         fake_enrich_mock = Mock(side_effect=fake_enrich)
 
         with (
-            patch("commissioning.jobs.tasks.discover_books", side_effect=fake_discover),
+            patch("commissioning.jobs.tasks.discover_amazon_items", side_effect=fake_discover_items),
+            patch("commissioning.jobs.tasks.fetch_amazon_item_record", side_effect=fake_fetch_item_record),
             patch("commissioning.jobs.tasks.create_scraper", return_value=object()),
             patch("commissioning.jobs.tasks.enrich_row", side_effect=fake_enrich_mock),
         ):
@@ -203,12 +215,13 @@ class PipelineSmokeTests(unittest.TestCase):
         self.assertTrue(all(book.sub_genre == "Domestic Thrillers" for book in books))
         self.assertTrue(all(book.book_type == "Series" for book in books))
         self.assertTrue(all((book.audio_score or 0) > 0 for book in books))
-        self.assertEqual(books[0].clean_author_names, "Ava North")
-        self.assertEqual((books[0].provenance_json or {}).get("amazon", {}).get("source_asin"), "B0SMOKE001")
-        self.assertEqual((books[0].provenance_json or {}).get("amazon", {}).get("detail_asin"), "B0SMOKEK01")
-        self.assertEqual(books[0].total_pages_in_series, "2541")
-        self.assertEqual(books[0].total_word_count, "635250")
-        self.assertEqual(books[0].total_hours, "64")
+        smoke_trail = next(book for book in books if book.title == "Smoke Trail")
+        self.assertEqual(smoke_trail.clean_author_names, "Ava North")
+        self.assertEqual((smoke_trail.provenance_json or {}).get("amazon", {}).get("source_asin"), "B0SMOKE001")
+        self.assertEqual((smoke_trail.provenance_json or {}).get("amazon", {}).get("detail_asin"), "B0SMOKEK01")
+        self.assertEqual(smoke_trail.total_pages_in_series, "2541")
+        self.assertEqual(smoke_trail.total_word_count, "635250")
+        self.assertEqual(smoke_trail.total_hours, "64")
         self.assertIsNotNone(export)
         self.assertEqual(export.row_count, 2)
         export_path = Path(export.file_path)
@@ -222,11 +235,15 @@ class PipelineSmokeTests(unittest.TestCase):
         self.assertNotIn("Data Quality Issues", header)
         with export_path.open("r", encoding="utf-8", newline="") as handle:
             exported = list(csv.DictReader(handle))
-        self.assertEqual(exported[0]["URL"], "https://www.amazon.com/Smoke-Trail-ebook/dp/B0SMOKEK01/ref=tmm_kin_swatch_0")
-        self.assertEqual(exported[0]["Publisher"], "Smoke House")
-        self.assertEqual(exported[0]["Best Sellers Rank"], "1")
-        self.assertEqual(exported[0]["Customer Reviews"], "4.5 out of 5 stars; 1200 ratings")
-        self.assertEqual(exported[0]["Goodreads rating"], "4.31")
+        exported_by_title = {row["Title"]: row for row in exported}
+        self.assertEqual(
+            exported_by_title["Smoke Trail"]["URL"],
+            "https://www.amazon.com/Smoke-Trail-ebook/dp/B0SMOKEK01/ref=tmm_kin_swatch_0",
+        )
+        self.assertEqual(exported_by_title["Smoke Trail"]["Publisher"], "Smoke House")
+        self.assertEqual(exported_by_title["Smoke Trail"]["Best Sellers Rank"], "1")
+        self.assertEqual(exported_by_title["Smoke Trail"]["Customer Reviews"], "4.5 out of 5 stars; 1200 ratings")
+        self.assertEqual(exported_by_title["Smoke Trail"]["Goodreads rating"], "4.31")
         db.close()
 
     def test_fast_scrape_skips_goodreads_but_exports_amazon_details(self):
@@ -286,14 +303,25 @@ class PipelineSmokeTests(unittest.TestCase):
             }
         ]
 
-        def fake_discover(source_type: str, url: str, max_results: int, *, on_progress=None):
-            if on_progress:
-                on_progress(0, len(records), None)
-                on_progress(1, len(records), records[0])
-            return records
+        items = [
+            AmazonItem(
+                asin=records[0]["source_asin"],
+                title=records[0]["title"],
+                author=records[0]["author"],
+                url=records[0]["url"],
+                raw={"source": "test"},
+            )
+        ]
+
+        def fake_discover_items(url: str, max_results: int = 0):
+            return items
+
+        def fake_fetch_item_record(item_payload: dict):
+            return records[0]
 
         with (
-            patch("commissioning.jobs.tasks.discover_books", side_effect=fake_discover),
+            patch("commissioning.jobs.tasks.discover_amazon_items", side_effect=fake_discover_items),
+            patch("commissioning.jobs.tasks.fetch_amazon_item_record", side_effect=fake_fetch_item_record),
             patch("commissioning.jobs.tasks.create_scraper", side_effect=AssertionError("Goodreads should not run")),
             patch("commissioning.jobs.tasks.enrich_row", side_effect=AssertionError("Goodreads should not run")),
         ):

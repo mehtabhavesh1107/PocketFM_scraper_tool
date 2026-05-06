@@ -19,7 +19,7 @@ import re
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from typing import Iterable, Iterator
 from urllib.parse import parse_qs, unquote, urlencode, urljoin, urlparse, urlunparse
 
@@ -1354,6 +1354,30 @@ def fetch_amazon_detail(url: str) -> AmazonDetail | None:
 
 def discover_amazon_items(url: str, max_results: int = 0) -> list[AmazonItem]:
     return list(iter_amazon_listing(url, max_results=max_results))
+
+
+def amazon_item_to_payload(item: AmazonItem) -> dict:
+    return asdict(item)
+
+
+def amazon_item_from_payload(payload: dict) -> AmazonItem:
+    return AmazonItem(
+        asin=str(payload.get("asin", "") or ""),
+        title=str(payload.get("title", "") or ""),
+        author=str(payload.get("author", "") or ""),
+        url=str(payload.get("url", "") or ""),
+        rating=payload.get("rating"),
+        rating_count=payload.get("rating_count"),
+        rank=str(payload.get("rank", "") or ""),
+        price=str(payload.get("price", "") or ""),
+        raw=payload.get("raw") if isinstance(payload.get("raw"), dict) else {},
+    )
+
+
+def fetch_amazon_item_record(payload: dict) -> dict:
+    item = amazon_item_from_payload(payload)
+    detail = _fetch_amazon_detail_with_retries(item)
+    return to_record(item, detail)
 
 
 def to_record(item: AmazonItem, detail: AmazonDetail | None = None) -> dict:

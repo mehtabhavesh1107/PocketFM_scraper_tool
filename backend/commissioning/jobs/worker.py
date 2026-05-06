@@ -10,12 +10,13 @@ from sqlalchemy.orm import Session
 
 from ..db import SessionLocal, init_db
 from ..models import Job, JobEvent
-from .tasks import run_contact_job, run_fast_scrape_job, run_goodreads_job, run_scrape_job
+from .tasks import run_amazon_detail_item_job, run_contact_job, run_fast_scrape_job, run_goodreads_job, run_scrape_job
 
 
 TASKS: dict[str, Callable[[str, int], None]] = {
     "scrape": run_scrape_job,
     "fast_scrape": run_fast_scrape_job,
+    "amazon_detail_item": run_amazon_detail_item_job,
     "enrich_goodreads": run_goodreads_job,
     "enrich_contacts": run_contact_job,
 }
