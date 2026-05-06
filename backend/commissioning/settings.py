@@ -110,6 +110,9 @@ CONTACT_SHEET_COLUMN_MAP = {
     "email_id": "Email ID",
     "email_source_note": "Email ID source",
     "email_type": "Email type",
+    "author_email": "Author Email",
+    "agent_email": "Agent Email",
+    "website": "Website",
     "contact_forms": "Contact Forms",
     "facebook_link": "Facebook link",
     "publisher_details": "Publisher's details",
@@ -135,7 +138,7 @@ SYNC_FAMILIES = {
         "goodreads_rating",
         "goodreads_rating_count",
     },
-    "contact": {"email_id", "email_source_note", "email_type", "contact_forms", "facebook_link", "publisher_details"},
+    "contact": {"email_id", "email_source_note", "email_type", "author_email", "agent_email", "website", "contact_forms", "facebook_link", "publisher_details"},
     "curation": {"genre", "sub_genre", "remarks", "final_list", "rationale", "series_flag", "cleaned_series_name"},
 }
 

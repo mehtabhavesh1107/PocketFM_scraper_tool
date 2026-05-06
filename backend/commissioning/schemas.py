@@ -191,6 +191,18 @@ class ContactRead(BaseModel):
     agent_email: str = ""
 
 
+class ContactPatch(BaseModel):
+    email_id: str | None = None
+    email_source_note: str | None = None
+    email_type: str | None = None
+    contact_forms: str | None = None
+    facebook_link: str | None = None
+    publisher_details: str | None = None
+    website: str | None = None
+    author_email: str | None = None
+    agent_email: str | None = None
+
+
 class EvaluationRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

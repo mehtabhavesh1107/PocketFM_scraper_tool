@@ -8,7 +8,7 @@ import './App.css';
 const API_BASE = ((import.meta.env.VITE_API_BASE_URL as string | undefined) || '/api').replace(/\/$/, '');
 const WORKSPACE_KEY = 'pocketfm_workspace_id';
 
-type PageId = 'dashboard' | 'scrapping' | 'mapping' | 'tier' | 'benchmark' | 'outreach' | 'export';
+type PageId = 'dashboard' | 'scrapping' | 'mapping' | 'tier' | 'contacts' | 'benchmark' | 'outreach' | 'export';
 type SourceType = 'amazon' | 'goodreads' | 'shared';
 type JobKind = 'scrape' | 'scrape-fast' | 'enrich-goodreads' | 'enrich-contacts';
 
@@ -298,6 +298,7 @@ const pageLabels: Record<PageId, string> = {
   scrapping: 'Scraping',
   mapping: 'Data & Genre Mapping',
   tier: 'Tier Mapping',
+  contacts: 'Contact Details Mapping',
   benchmark: 'Benchmark Filters',
   outreach: 'Author Outreach',
   export: 'Export & Share',
@@ -384,6 +385,11 @@ function sourceFor(book: Book): string {
 
 function contactEmail(book: Book): string {
   return book.contact?.email_id || book.contact?.author_email || book.contact?.agent_email || '';
+}
+
+function contactReady(book: Book): boolean {
+  const contact = book.contact;
+  return Boolean(contact?.email_id || contact?.author_email || contact?.agent_email || contact?.contact_forms || contact?.facebook_link || contact?.publisher_details);
 }
 
 function seriesCount(book: Book): number {
@@ -535,8 +541,15 @@ function mappingFilterValue(book: Book, key: MappingFilterKey, rules: TierRule[]
     remarks: book.remarks || '-',
     synopsis: book.synopsis || '-',
     email: contactEmail(book) || '-',
+    emailSource: book.contact?.email_source_note || '-',
+    emailType: book.contact?.email_type || '-',
+    authorEmail: book.contact?.author_email || '-',
+    agentEmail: book.contact?.agent_email || '-',
+    website: book.contact?.website || '-',
     contactForms: book.contact?.contact_forms || '-',
+    facebookLink: book.contact?.facebook_link || '-',
     publisherDetails: book.contact?.publisher_details || '-',
+    contactStatus: contactReady(book) ? 'Ready' : 'Missing',
   };
   return values[key] || '-';
 }
@@ -603,9 +616,16 @@ const MAPPING_COLUMNS: MappingColumn[] = [
   { key: 'rationale', label: 'Rationale', className: 'long-cell' },
   { key: 'remarks', label: 'Remarks', className: 'long-cell' },
   { key: 'synopsis', label: 'Synopsis', className: 'cell-synopsis' },
-  { key: 'email', label: 'Author email' },
+  { key: 'email', label: 'Email ID' },
+  { key: 'emailSource', label: 'Email ID source' },
+  { key: 'emailType', label: 'Email type' },
+  { key: 'authorEmail', label: 'Author Email' },
+  { key: 'agentEmail', label: 'Agent Email' },
+  { key: 'website', label: 'Website', className: 'link-cell' },
   { key: 'contactForms', label: 'Contact Forms', className: 'long-cell' },
+  { key: 'facebookLink', label: 'Facebook link', className: 'link-cell' },
   { key: 'publisherDetails', label: "Publisher's details", className: 'long-cell' },
+  { key: 'contactStatus', label: 'Contact status' },
 ];
 
 function renderMappingCell(book: Book, column: MappingColumn, patchBook: (bookId: number, patch: Partial<Book>) => void, genreOptions: string[]): ReactNode {
@@ -639,6 +659,8 @@ function renderMappingCell(book: Book, column: MappingColumn, patchBook: (bookId
     case 'goodreadLink':
     case 'seriesBook1':
     case 'seriesLink':
+    case 'website':
+    case 'facebookLink':
       return value !== '-' ? <a href={value} target="_blank" rel="noreferrer">Open</a> : '-';
     case 'synopsis':
       return <span title={book.synopsis || ''}>{book.synopsis || '-'}</span>;
@@ -1022,6 +1044,12 @@ function App() {
     setBooks((prev) => prev.map((book) => (book.id === bookId ? updated : book)));
   }
 
+  async function patchContact(bookId: number, patch: Partial<Contact>) {
+    const updated = await api<Book>(`/books/${bookId}/contact`, { method: 'PATCH', body: JSON.stringify(patch) });
+    setBooks((prev) => prev.map((book) => (book.id === bookId ? updated : book)));
+    if (batch) await loadSummary(batch.id);
+  }
+
   async function acceptGoodreadsCandidate(bookId: number, candidate: GoodreadsCandidate) {
     try {
       const updated = await api<Book>(`/books/${bookId}/goodreads/accept`, {
@@ -1223,6 +1251,7 @@ function App() {
             <NavItem page="mapping" activePage={activePage} onClick={nav} icon="▦" label="Data & Genre Mapping" badge={summary?.total_books || 0} />
             <NavItem page="benchmark" activePage={activePage} onClick={nav} icon="◎" label="Benchmark Filters" badge={summary?.shortlisted_books || 0} green />
             <NavItem page="tier" activePage={activePage} onClick={nav} icon="▣" label="Tier Mapping" badge={books.filter((book) => book.tier).length} green />
+            <NavItem page="contacts" activePage={activePage} onClick={nav} icon="@" label="Contact Details Mapping" badge={books.filter(contactReady).length} green />
           </div>
           <div className="sidebar-section">
             <div className="sidebar-label">Action</div>
@@ -1309,9 +1338,18 @@ function App() {
             <TierMappingPage
               books={books}
               applyTierMapping={applyTierMapping}
-              createExport={createExport}
               tierRules={tierRules}
               setTierRules={setTierRules}
+              nav={nav}
+            />
+          )}
+          {activePage === 'contacts' && (
+            <ContactMappingPage
+              books={books}
+              runJob={runJob}
+              jobRunning={jobRunning}
+              patchContact={patchContact}
+              createExport={createExport}
               nav={nav}
             />
           )}
@@ -1498,7 +1536,7 @@ function DashboardPage({
         <Stage value={totalSources} label="Links saved" color="var(--p600)" width={totalSources ? 100 : 0} />
         <Stage value={totalBooks} label="Books mapped" color="var(--b600)" width={totalBooks ? 100 : 0} />
         <Stage value={shortlistedBooks} label="Shortlisted" color="var(--t600)" width={totalBooks ? (shortlistedBooks / totalBooks) * 100 : 0} />
-        <Stage value={metrics.contacted} label="Outreach sent" color="var(--a400)" width={totalBooks ? (metrics.contacted / totalBooks) * 100 : 0} />
+        <Stage value={metrics.emails} label="Contacts ready" color="var(--a400)" width={totalBooks ? (metrics.emails / totalBooks) * 100 : 0} />
       </div>
 
       <div className="metrics">
@@ -1545,7 +1583,7 @@ function DashboardPage({
           <button className="btn" onClick={() => nav('scrapping')}>↻ Add more links</button>
           <button className="btn" onClick={() => nav('mapping')}>✎ Edit genre mapping</button>
           <button className="btn" onClick={() => nav('benchmark')}>◎ Adjust filters</button>
-          <button className="btn" onClick={() => nav('outreach')}>✉ Draft outreach emails</button>
+          <button className="btn" onClick={() => nav('contacts')}>@ Map contacts</button>
           <button className="btn btn-teal" onClick={() => nav('export')}>⇩ Export final list</button>
         </div>
       </div>
@@ -2107,14 +2145,12 @@ function MappingPage({
 function TierMappingPage({
   books,
   applyTierMapping,
-  createExport,
   tierRules,
   setTierRules,
   nav,
 }: {
   books: Book[];
   applyTierMapping: (rules?: TierRule[], exportAfterApply?: boolean) => void;
-  createExport: (format: 'csv' | 'xlsx' | 'pdf' | 'json', profile?: string) => void;
   tierRules: TierRule[];
   setTierRules: (rules: TierRule[]) => void;
   nav: (page: PageId) => void;
@@ -2154,7 +2190,7 @@ function TierMappingPage({
     <section className="page active">
       <PageHead title="Tier Mapping" desc="Apply editable GR rating-count and length rules after benchmark filters are set.">
         <button className="btn btn-primary btn-sm" onClick={() => applyTierMapping(tierRules, false)} disabled={!books.length}>Apply rules</button>
-        <button className="btn btn-sm" onClick={() => applyTierMapping(tierRules, true)} disabled={!books.length}>Apply & CSV</button>
+        <button className="btn btn-sm" onClick={() => nav('contacts')} disabled={!books.length}>Next: Contacts</button>
       </PageHead>
 
       <div className="metrics">
@@ -2186,7 +2222,7 @@ function TierMappingPage({
           <button className="btn btn-sm" onClick={() => setTierRules(DEFAULT_TIER_RULES)}>Reset default rules</button>
           <div className="spacer" />
           <button className="btn btn-primary btn-sm" onClick={() => applyTierMapping(tierRules, false)} disabled={!books.length}>Enter rules</button>
-          <button className="btn btn-sm" onClick={() => createExport('csv', 'final_csv')} disabled={!books.length}>Create Final CSV</button>
+          <button className="btn btn-sm" onClick={() => nav('contacts')} disabled={!books.length}>Open contact mapping</button>
         </div>
         <div className="quality-chips">
           {Object.entries(tierCounts).map(([tier, count]) => (
@@ -2250,7 +2286,7 @@ function TierMappingPage({
       <div className="action-row">
         <button className="btn" onClick={() => nav('benchmark')}>← Back to benchmark</button>
         <div className="spacer" />
-        <button className="btn btn-primary" onClick={() => nav('export')}>Next: Export →</button>
+        <button className="btn btn-primary" onClick={() => nav('contacts')}>Next: Contact Details Mapping →</button>
       </div>
     </section>
   );
@@ -2354,6 +2390,177 @@ function BenchmarkPage({
   );
 }
 
+type ContactField = keyof Contact;
+
+function ContactFieldInput({
+  book,
+  field,
+  patchContact,
+  multiline = false,
+  placeholder = '',
+}: {
+  book: Book;
+  field: ContactField;
+  patchContact: (bookId: number, patch: Partial<Contact>) => void;
+  multiline?: boolean;
+  placeholder?: string;
+}) {
+  const value = String(book.contact?.[field] || '');
+  const [draft, setDraft] = useState(value);
+
+  useEffect(() => {
+    setDraft(value);
+  }, [value]);
+
+  function save() {
+    if (draft !== value) patchContact(book.id, { [field]: draft } as Partial<Contact>);
+  }
+
+  if (multiline) {
+    return <textarea className="contact-textarea" value={draft} placeholder={placeholder} onChange={(event) => setDraft(event.target.value)} onBlur={save} />;
+  }
+  return <input className="contact-input" value={draft} placeholder={placeholder} onChange={(event) => setDraft(event.target.value)} onBlur={save} />;
+}
+
+function ContactTypeSelect({
+  book,
+  patchContact,
+}: {
+  book: Book;
+  patchContact: (bookId: number, patch: Partial<Contact>) => void;
+}) {
+  const value = book.contact?.email_type || '';
+  return (
+    <select className="tbl-select contact-select" value={value} onChange={(event) => patchContact(book.id, { email_type: event.target.value })}>
+      <option value="">Unknown</option>
+      <option>Author email</option>
+      <option>Agent email</option>
+      <option>Publisher email</option>
+      <option>Author email; Agent email</option>
+      <option>Contact email</option>
+      <option>Contact form</option>
+      <option>Mixed</option>
+    </select>
+  );
+}
+
+function ContactMappingPage({
+  books,
+  runJob,
+  jobRunning,
+  patchContact,
+  createExport,
+  nav,
+}: {
+  books: Book[];
+  runJob: (kind: JobKind) => void;
+  jobRunning: boolean;
+  patchContact: (bookId: number, patch: Partial<Contact>) => void;
+  createExport: (format: 'csv' | 'xlsx' | 'pdf' | 'json', profile?: string) => void;
+  nav: (page: PageId) => void;
+}) {
+  const [filters, setFilters] = useState<Partial<Record<MappingFilterKey, string>>>({});
+  const readyCount = books.filter(contactReady).length;
+  const emailCount = books.filter((book) => contactEmail(book)).length;
+  const authorEmailCount = books.filter((book) => book.contact?.author_email).length;
+  const agentEmailCount = books.filter((book) => book.contact?.agent_email).length;
+  const publisherCount = books.filter((book) => book.contact?.publisher_details).length;
+  const missingCount = Math.max(books.length - readyCount, 0);
+  const visibleBooks = useMemo(
+    () => books.filter((book) => (Object.entries(filters) as [MappingFilterKey, string][]).every(([key, value]) => !value || mappingFilterValue(book, key) === value)),
+    [books, filters],
+  );
+  const hasFilters = Object.values(filters).some(Boolean);
+
+  function setFilter(key: MappingFilterKey, value: string) {
+    setFilters((current) => {
+      const next = { ...current };
+      if (value) next[key] = value;
+      else delete next[key];
+      return next;
+    });
+  }
+
+  return (
+    <section className="page active">
+      <PageHead title="Contact Details Mapping" desc="Map author, agent, and publisher contact data after tier mapping so the final CSV is outreach-ready.">
+        <button className="btn btn-primary btn-sm" onClick={() => runJob('enrich-contacts')} disabled={jobRunning || !books.length}>Find contact details</button>
+        <button className="btn btn-sm" onClick={() => createExport('csv', 'final_csv')} disabled={!books.length}>Create Final CSV</button>
+      </PageHead>
+
+      <div className="metrics">
+        <Metric icon="@" value={`${readyCount}/${books.length || 0}`} label="Contact-ready rows" delta={`${missingCount} missing`} />
+        <Metric icon="✉" value={String(emailCount)} label="Email ID mapped" delta={`${authorEmailCount} author emails`} />
+        <Metric icon="◇" value={String(agentEmailCount)} label="Agent emails" delta="Rights outreach path" />
+        <Metric icon="▤" value={String(publisherCount)} label="Publisher details" delta="Publisher/rights leads" />
+      </div>
+
+      <div className="toolbar">
+        {hasFilters && <button className="btn btn-sm" onClick={() => setFilters({})}>Clear column filters</button>}
+        <div className="spacer" />
+        <span className="cell-muted">{visibleBooks.length} visible rows</span>
+      </div>
+
+      <div className="card table-card">
+        <div className="table-head">
+          <span>Author and publisher contact fields</span>
+          <span className="tag tg-t">{readyCount} ready</span>
+          <span className="tag tg-g">{missingCount} missing</span>
+        </div>
+        <div className="tbl-wrap">
+          <table className="contact-table">
+            <thead>
+              <tr>
+                <FilterHeader label="Title" filterKey="title" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Author" filterKey="author" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Publisher" filterKey="publisher" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Tier" filterKey="tier" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Email ID" filterKey="email" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Email ID source" filterKey="emailSource" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Email type" filterKey="emailType" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Author Email" filterKey="authorEmail" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Agent Email" filterKey="agentEmail" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Website" filterKey="website" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Contact Forms" filterKey="contactForms" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Facebook" filterKey="facebookLink" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Publisher Details" filterKey="publisherDetails" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="Status" filterKey="contactStatus" books={books} filters={filters} onFilter={setFilter} />
+              </tr>
+            </thead>
+            <tbody>
+              {visibleBooks.map((book) => (
+                <tr key={book.id}>
+                  <td><div className="cell-title" title={book.title}>{book.title}</div></td>
+                  <td>{book.author || '-'}</td>
+                  <td>{book.publisher || '-'}</td>
+                  <td><span className="tag tg-p">{tierProfile(book).tier}</span></td>
+                  <td><ContactFieldInput book={book} field="email_id" patchContact={patchContact} placeholder="email@domain.com" /></td>
+                  <td><ContactFieldInput book={book} field="email_source_note" patchContact={patchContact} placeholder="source note" /></td>
+                  <td><ContactTypeSelect book={book} patchContact={patchContact} /></td>
+                  <td><ContactFieldInput book={book} field="author_email" patchContact={patchContact} placeholder="author email" /></td>
+                  <td><ContactFieldInput book={book} field="agent_email" patchContact={patchContact} placeholder="agent email" /></td>
+                  <td><ContactFieldInput book={book} field="website" patchContact={patchContact} placeholder="https://..." /></td>
+                  <td><ContactFieldInput book={book} field="contact_forms" patchContact={patchContact} multiline /></td>
+                  <td><ContactFieldInput book={book} field="facebook_link" patchContact={patchContact} placeholder="https://facebook.com/..." /></td>
+                  <td><ContactFieldInput book={book} field="publisher_details" patchContact={patchContact} multiline /></td>
+                  <td><span className={`tag ${contactReady(book) ? 'tg-t' : 'tg-g'}`}>{contactReady(book) ? 'Ready' : 'Missing'}</span></td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div className="action-row">
+        <button className="btn" onClick={() => nav('tier')}>← Back to tier mapping</button>
+        <div className="spacer" />
+        <button className="btn" onClick={() => createExport('csv', 'final_csv')} disabled={!books.length}>Create Final CSV</button>
+        <button className="btn btn-primary" onClick={() => nav('outreach')}>Next: Author Outreach →</button>
+      </div>
+    </section>
+  );
+}
+
 function OutreachPage({
   books,
   selectedBook,
@@ -2419,7 +2626,7 @@ function OutreachPage({
         </div>
       </div>
       <div className="action-row">
-        <button className="btn" onClick={() => nav('tier')}>← Back to tier mapping</button>
+        <button className="btn" onClick={() => nav('contacts')}>← Back to contact mapping</button>
         <div className="spacer" />
         <button className="btn btn-primary" onClick={() => nav('export')}>Next: Export →</button>
       </div>
@@ -2469,7 +2676,7 @@ function ExportPage({
         <div className="card">
           <div className="card-title">Export field selection</div>
           <div className="checkbox-grid">
-            {['Title & author', 'Rating & reviews', 'Primary genre', 'Sub-genre', 'Type', 'Word count', 'Audio score', 'Synopsis', 'Author email', 'Series book count', 'Publisher name', 'Subjective eval score'].map((field) => (
+            {['Title & author', 'Rating & reviews', 'Primary genre', 'Sub-genre', 'Type', 'Word count', 'Audio score', 'Synopsis', 'Author email', 'Agent email', 'Website', 'Series book count', 'Publisher name', 'Subjective eval score'].map((field) => (
               <label key={field}><input type="checkbox" defaultChecked={field !== 'Publisher name'} /> {field}</label>
             ))}
           </div>

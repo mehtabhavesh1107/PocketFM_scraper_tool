@@ -344,6 +344,24 @@ class CommissioningApiTests(unittest.TestCase):
             self.assertEqual(row["mg_min"], "20k")
             self.assertEqual(row["mg_max"], "25k")
 
+            contact = await self._request(
+                "PATCH",
+                f"/api/books/{row['id']}/contact",
+                json={
+                    "email_id": "rights@example.com",
+                    "author_email": "author@example.com",
+                    "agent_email": "agent@exampleagency.com",
+                    "email_type": "Author email; Agent email",
+                    "website": "https://author.example.com",
+                    "publisher_details": "Example Press rights desk",
+                },
+            )
+            self.assertEqual(contact.status_code, 200)
+            contact_row = contact.json()["contact"]
+            self.assertEqual(contact_row["author_email"], "author@example.com")
+            self.assertEqual(contact_row["agent_email"], "agent@exampleagency.com")
+            self.assertEqual(contact_row["website"], "https://author.example.com")
+
             export = await self._request(
                 "POST",
                 f"/api/batches/{batch_id}/exports",
@@ -358,6 +376,11 @@ class CommissioningApiTests(unittest.TestCase):
             self.assertIn("Author name", header)
             self.assertIn("Publisher name", header)
             self.assertIn("Book 10 No Of Rating", header)
+            self.assertIn("Email ID source", header)
+            self.assertIn("Email type", header)
+            self.assertIn("Author Email", header)
+            self.assertIn("Agent Email", header)
+            self.assertIn("Website", header)
 
         import asyncio
 

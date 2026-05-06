@@ -86,6 +86,11 @@ SAMPLE_COMPATIBLE_COLUMNS = [
     "Duplicate Check",
     "Unnamed: 44",
     "Email ID",
+    "Email ID source",
+    "Email type",
+    "Author Email",
+    "Agent Email",
+    "Website",
     "Contact Forms",
     "Facebook link",
     "Publisher's details",
@@ -470,6 +475,7 @@ def flatten_book(book: Book, columns: list[str] | None = None) -> dict:
         _set(row, "Publisher's details", book.contact.publisher_details)
         _set(row, "Author Email", book.contact.author_email)
         _set(row, "Agent Email", book.contact.agent_email)
+        _set(row, "Website", book.contact.website)
     return row
 
 

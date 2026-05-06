@@ -689,6 +689,17 @@ def run_contact_job(job_id: str, batch_id: int) -> None:
     db = SessionLocal()
     job = db.get(Job, job_id)
     logger = JobLogger(db, job)
+    contact_update_fields = (
+        "email_id",
+        "email_source_note",
+        "email_type",
+        "contact_forms",
+        "facebook_link",
+        "publisher_details",
+        "website",
+        "author_email",
+        "agent_email",
+    )
     try:
         books = db.query(Book).filter(Book.batch_id == batch_id).order_by(Book.id.asc()).all()
         logger.start("Starting author contact enrichment.")
@@ -699,12 +710,10 @@ def run_contact_job(job_id: str, batch_id: int) -> None:
                 contact = book.contact or Contact(book_id=book.id)
                 if book.contact is None:
                     db.add(contact)
-                contact.email_id = updates.get("email_id", contact.email_id)
-                contact.email_source_note = updates.get("email_source_note", contact.email_source_note)
-                contact.email_type = updates.get("email_type", contact.email_type)
-                contact.contact_forms = updates.get("contact_forms", contact.contact_forms)
-                contact.facebook_link = updates.get("facebook_link", contact.facebook_link)
-                contact.publisher_details = updates.get("publisher_details", contact.publisher_details)
+                for field in contact_update_fields:
+                    value = updates.get(field)
+                    if value not in (None, ""):
+                        setattr(contact, field, value)
                 db.commit()
                 logger.event("info", f"Contact enrichment completed for '{book.title}'.", progress_current=idx, progress_total=len(books))
             except Exception as exc:

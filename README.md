@@ -65,11 +65,12 @@ The app helps you turn source links into a curated commissioning shortlist.
 1. Create or select a run.
 2. Add Amazon and Goodreads source URLs.
 3. Scrape candidates from those sources.
-4. Enrich rows with Amazon details, Goodreads metadata, and optional contact research.
+4. Enrich rows with Amazon details and Goodreads metadata.
 5. Review data quality issues and accept manual Goodreads candidates when needed.
-6. Apply tier and benchmark rules.
-7. Draft outreach copy.
-8. Export CSV, diagnostic CSV, JSON, XLSX, or PDF files.
+6. Apply benchmark filters and tier rules.
+7. Run contact details mapping for author, agent, publisher, website, form, and social contact fields.
+8. Draft outreach copy.
+9. Export CSV, diagnostic CSV, JSON, XLSX, or PDF files.
 
 ## Main Workflow
 
@@ -91,7 +92,7 @@ Job buttons:
 - `Fast scrape`: fetches Amazon details and skips Goodreads mapping for speed.
 - `Full scrape`: fetches source data and auto-runs Goodreads enrichment.
 - `Enrich Goodreads`: runs Goodreads enrichment on existing books.
-- `Find contacts`: runs optional author contact enrichment.
+- `Find contacts`: runs author contact enrichment on existing books.
 
 The UI polls job status from the backend until the job completes or fails.
 
@@ -115,7 +116,7 @@ Default rule set:
 - Tier 4: GR ratings 5,000+ and length 50+ hours, MG 3k-5k.
 - Tier 5: all other rows, no MG.
 
-The UI lets these tier names, GR rating-count thresholds, length thresholds, and MG values be edited before applying the mapping. The backend receives the edited rules and stamps the final tier columns onto the books.
+The UI lets these tier names, GR rating-count thresholds, length thresholds, and MG values be edited before applying the mapping. The backend receives the edited rules and stamps the final tier columns onto the books. After this step, continue to Contact Details Mapping before creating the outreach CSV.
 
 Column meanings:
 
@@ -133,11 +134,25 @@ Tune shortlist filters such as minimum rating, review count, word count, series 
 
 The backend stores whether each book matched the current benchmark and the UI shows the resulting shortlist.
 
+### Contact Details Mapping
+
+Runs contact discovery after tier mapping and exposes the final outreach contact columns in one editable table:
+
+- `Email ID`
+- `Email ID source`
+- `Email type`
+- `Author Email`
+- `Agent Email`
+- `Website`
+- `Contact Forms`
+- `Facebook link`
+- `Publisher's details`
+
+Each contact column has a dropdown filter in the header. Inline edits are saved back to the backend through `/api/books/{book_id}/contact`, and `Create Final CSV` exports the final commissioning file with contact details included.
+
 ### Author Outreach
 
-Review reachable books, edit contact fields, generate local outreach drafts, and mark outreach state.
-
-Contact discovery is optional and depends on local helper scripts being available.
+Review reachable books, generate local outreach drafts, and mark outreach state.
 
 ### Export & Share
 
@@ -145,7 +160,7 @@ Create downloadable files from the current run.
 
 Common export profiles:
 
-- Final CSV: sample-compatible commissioning output with tier, length, MG, benchmark, and contact columns.
+- Final CSV: sample-compatible commissioning output with tier, length, MG, benchmark, and contact columns, including author email, agent email, email type/source, website, forms, Facebook link, and publisher details.
 - Full diagnostic CSV: includes provenance and data-quality columns for audit/debugging.
 - JSON diagnostic: structured diagnostic rows.
 - XLSX/PDF: available through backend export support.
@@ -432,7 +447,9 @@ If the helper is missing, the sync endpoint returns a clear unavailable message 
 
 ### Contact Research
 
-Contact enrichment depends on the local `contact_info_pipeline.py` helper. If the helper is missing, contact jobs safely skip enrichment and keep the rest of the run intact.
+Contact enrichment first uses the local `contact_info_pipeline.py` helper when that larger research pipeline is available. If the helper is missing or fails, the backend falls back to its built-in public-web contact discovery using DuckDuckGo-style search (`ddgs`), page fetches, email extraction, contact-form detection, Facebook link detection, and author/agent/publisher email classification.
+
+Contact jobs save results into the `contacts` table and expose them in Contact Details Mapping. Manual corrections can be made through the UI and are preserved by later enrichment runs unless the user edits a value directly.
 
 ## Project Structure
 
@@ -470,6 +487,7 @@ Core API groups:
 - `/api/jobs/{job_id}` and `/api/jobs/{job_id}/events`: inspect job status/events.
 - `/api/batches/{batch_id}/books`: list books in a run.
 - `/api/books/{book_id}`: patch book fields.
+- `/api/books/{book_id}/contact`: patch contact fields.
 - `/api/batches/{batch_id}/data-quality`: data-quality report.
 - `/api/batches/{batch_id}/benchmark/apply`: apply shortlist filters.
 - `/api/batches/{batch_id}/tier-mapping/apply`: apply tier columns.
@@ -511,6 +529,7 @@ The test suite covers:
 - Large Amazon category/search links can take a long time because the cloud configuration intentionally uses low concurrency and slower page delay to reduce blocking.
 - Some Amazon pages may expose incomplete metadata because Amazon markup changes frequently.
 - Goodreads matching is stricter than before, but no title-matching system should be treated as perfect. The app now prefers exact title/author evidence, keeps low-confidence candidates for review, and avoids misleading cross-title matches where possible.
+- Contact discovery uses public web search and public pages. It can still miss authors with no public email, blocked websites, JavaScript-only contact forms, or ambiguous pen names, so the Contact Details Mapping tab keeps all results editable and filterable.
 - For blocked or high-risk sources, use the blocked/deferred dashboard and CSV import fallback. The cleanest long-term solution is an authorized data feed or user-provided export.
 
 ### Cloud and operations

@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 from ..db import get_db
 from ..jobs.manager import job_manager
 from ..jobs.tasks import run_contact_job, run_fast_scrape_job, run_goodreads_job, run_scrape_job
-from ..models import Batch, Book, Job, JobEvent, OutreachMessage, SourceLink, StoredSchema
+from ..models import Batch, Book, Contact, Job, JobEvent, OutreachMessage, SourceLink, StoredSchema
 from ..schemas import (
     BatchCreate,
     BatchRead,
@@ -20,6 +20,7 @@ from ..schemas import (
     BookPatch,
     BookRead,
     BooksPage,
+    ContactPatch,
     EvaluationPatch,
     ExportRead,
     ExportRequest,
@@ -388,6 +389,20 @@ def update_book(book_id: int, payload: BookPatch, workspace_id: str = Depends(ge
     book = _get_book_or_404(db, book_id, workspace_id)
     updated = patch_book(db, book, payload.model_dump())
     return BookRead.model_validate(updated)
+
+
+@router.patch("/books/{book_id}/contact", response_model=BookRead)
+def update_contact(book_id: int, payload: ContactPatch, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+    book = _get_book_or_404(db, book_id, workspace_id)
+    contact = book.contact
+    if contact is None:
+        contact = Contact(book_id=book.id)
+        db.add(contact)
+    for field, value in payload.model_dump(exclude_unset=True).items():
+        setattr(contact, field, value or "")
+    db.commit()
+    db.refresh(book)
+    return BookRead.model_validate(book)
 
 
 @router.post("/batches/{batch_id}/benchmark/apply", response_model=BenchmarkResponse)
