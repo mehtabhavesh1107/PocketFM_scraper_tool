@@ -135,13 +135,23 @@ def apply_benchmark(db: Session, batch_id: int, filters: dict) -> list[int]:
     return sorted(matched_ids)
 
 
-def apply_tier_mapping_to_batch(db: Session, batch_id: int) -> dict:
-    books = db.query(Book).filter(Book.batch_id == batch_id).order_by(Book.id.asc()).all()
+def apply_tier_mapping_to_batch(db: Session, batch_id: int, rules: list[dict] | None = None, shortlisted_only: bool = False) -> dict:
+    query = db.query(Book).filter(Book.batch_id == batch_id)
+    if shortlisted_only:
+        query = query.filter(Book.shortlisted.is_(True))
+    books = query.order_by(Book.id.asc()).all()
     tier_counts: dict[str, int] = {}
     for book in books:
-        profile = apply_tier_mapping(book)
+        apply_benchmark_mapping(book)
+        profile = apply_tier_mapping(book, rules)
         tier = profile["Tier"] or "Unmapped"
         tier_counts[tier] = tier_counts.get(tier, 0) + 1
+    batch = db.get(Batch, batch_id)
+    if batch is not None and rules:
+        metadata = dict(batch.metadata_json or {})
+        metadata["tier_rules"] = rules
+        metadata["tier_mapping_scope"] = "shortlisted" if shortlisted_only else "all"
+        batch.metadata_json = metadata
     db.commit()
     return {"total": len(books), "tier_counts": tier_counts}
 

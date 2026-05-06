@@ -97,6 +97,9 @@ interface Book {
   sub_genre?: string;
   cleaned_series_name?: string;
   series_flag?: string;
+  duplicates_basis_series?: string;
+  author_check?: string;
+  clean_author_names?: string;
   total_pages_in_series?: string;
   total_word_count?: string;
   total_hours?: string;
@@ -113,6 +116,18 @@ interface Book {
   series_link?: string;
   remarks?: string;
   primary_book_count?: string;
+  gr_book_1_rating?: string;
+  gr_book_2_rating?: string;
+  gr_book_3_rating?: string;
+  gr_book_4_rating?: string;
+  gr_book_5_rating?: string;
+  gr_book_6_rating?: string;
+  gr_book_7_rating?: string;
+  gr_book_8_rating?: string;
+  gr_book_9_rating?: string;
+  gr_book_10_rating?: string;
+  final_list?: string;
+  rationale?: string;
   goodreads_rating?: string;
   goodreads_rating_count?: string;
   word_count?: number | null;
@@ -385,25 +400,24 @@ function audioScore(book: Book): number {
   return book.audio_score || 0;
 }
 
-type MappingFilterKey =
-  | 'title'
-  | 'author'
-  | 'source'
-  | 'rating'
-  | 'reviews'
-  | 'tier'
-  | 'length'
-  | 'mgMin'
-  | 'mgMax'
-  | 'genre'
-  | 'subGenre'
-  | 'type'
-  | 'seriesBooks'
-  | 'audioScore'
-  | 'wordCount'
-  | 'email';
+type MappingFilterKey = string;
+type MappingSortKey = string;
 
-type MappingSortKey = 'title' | 'author' | 'rating' | 'rating_count' | 'word_count' | 'tier' | 'length';
+interface TierRule {
+  tier: string;
+  minGrRatings: number;
+  minLengthHours: number;
+  mgMin: string;
+  mgMax: string;
+}
+
+const DEFAULT_TIER_RULES: TierRule[] = [
+  { tier: 'Tier 1', minGrRatings: 20000, minLengthHours: 80, mgMin: '10k', mgMax: '15k' },
+  { tier: 'Tier 2', minGrRatings: 20000, minLengthHours: 50, mgMin: '10k', mgMax: '12.5k' },
+  { tier: 'Tier 3', minGrRatings: 5000, minLengthHours: 80, mgMin: '7.5k', mgMax: '10k' },
+  { tier: 'Tier 4', minGrRatings: 5000, minLengthHours: 50, mgMin: '3k', mgMax: '5k' },
+  { tier: 'Tier 5', minGrRatings: 0, minLengthHours: 0, mgMin: 'No MG', mgMax: 'No MG' },
+];
 
 interface TierProfile {
   tier: string;
@@ -434,64 +448,203 @@ function goodreadsReviewCount(book: Book): number {
   return parseMetric(book.gr_ratings) || parseMetric(book.goodreads_rating_count);
 }
 
-function tierProfile(book: Book): TierProfile {
+function computedTierRule(grRatings: number, length: number, rules: TierRule[] = DEFAULT_TIER_RULES): TierRule {
+  const normalized = rules.length ? rules : DEFAULT_TIER_RULES;
+  return (
+    normalized.find((rule) => grRatings >= rule.minGrRatings && length >= rule.minLengthHours) ||
+    normalized[normalized.length - 1] ||
+    DEFAULT_TIER_RULES[DEFAULT_TIER_RULES.length - 1]
+  );
+}
+
+function tierProfile(book: Book, rules: TierRule[] = DEFAULT_TIER_RULES, usePersisted = true): TierProfile {
   const length = bookLengthHours(book);
   const grRatings = goodreadsReviewCount(book);
-  let tier = book.tier || 'Tier 5';
-  let mgMin = book.mg_min || 'No MG';
-  let mgMax = book.mg_max || 'No MG';
-
-  if (!book.tier && grRatings >= 20000 && length >= 80) {
-    tier = 'Tier 1';
-    mgMin = '10k';
-    mgMax = '15k';
-  } else if (!book.tier && grRatings >= 20000 && length >= 50) {
-    tier = 'Tier 2';
-    mgMin = '10k';
-    mgMax = '12.5k';
-  } else if (!book.tier && grRatings >= 5000 && length >= 80) {
-    tier = 'Tier 3';
-    mgMin = '7.5k';
-    mgMax = '10k';
-  } else if (!book.tier && grRatings >= 5000 && length >= 50) {
-    tier = 'Tier 4';
-    mgMin = '3k';
-    mgMax = '5k';
-  }
+  const rule = computedTierRule(grRatings, length, rules);
+  const tier = usePersisted && book.tier ? book.tier : rule.tier;
+  const mgMin = usePersisted && book.mg_min ? book.mg_min : rule.mgMin || 'No MG';
+  const mgMax = usePersisted && book.mg_max ? book.mg_max : rule.mgMax || 'No MG';
 
   return {
     tier,
     grRatings,
-    trope: book.trope || 'Needgap',
+    trope: usePersisted && book.trope ? book.trope : 'Needgap',
     length,
     mgMin,
     mgMax,
-    revShareMin: book.rev_share_min || '13%',
-    revShareMax: book.rev_share_max || '18%',
+    revShareMin: usePersisted && book.rev_share_min ? book.rev_share_min : '13%',
+    revShareMax: usePersisted && book.rev_share_max ? book.rev_share_max : '18%',
   };
 }
 
-function mappingFilterValue(book: Book, key: MappingFilterKey): string {
-  const profile = tierProfile(book);
-  const values: Record<MappingFilterKey, string> = {
+function mappingFilterValue(book: Book, key: MappingFilterKey, rules: TierRule[] = DEFAULT_TIER_RULES, usePersistedTier = true): string {
+  const profile = tierProfile(book, rules, usePersistedTier);
+  const values: Record<string, string> = {
     title: book.title || '-',
     author: book.author || '-',
+    authorName: book.author || '-',
+    publisher: book.publisher || '-',
+    publisherName: book.publisher || '-',
     source: sourceFor(book),
     rating: book.rating ? book.rating.toFixed(1) : '-',
+    amazonReviews: fmtNumber(book.rating_count),
+    goodreadsRating: book.goodreads_rating || '-',
     reviews: fmtNumber(goodreadsReviewCount(book)),
     tier: profile.tier,
     length: profile.length ? String(profile.length) : '-',
     mgMin: profile.mgMin,
     mgMax: profile.mgMax,
+    trope: profile.trope,
+    revShareMin: profile.revShareMin,
+    revShareMax: profile.revShareMax,
+    publicationDate: book.publication_date || '-',
+    partOfSeries: book.part_of_series || '-',
+    language: book.language || '-',
+    bestSellersRank: book.best_sellers_rank || '-',
+    printLength: book.print_length || '-',
+    bookNumber: book.book_number || '-',
+    format: book.format || '-',
     genre: book.genre || 'Unmapped',
     subGenre: book.sub_genre || '-',
     type: book.book_type || '-',
     seriesBooks: String(seriesCount(book)),
+    seriesFlag: book.series_flag || '-',
+    cleanedSeriesName: book.cleaned_series_name || '-',
+    duplicatesBasisSeries: book.duplicates_basis_series || '-',
+    authorCheck: book.author_check || '-',
+    cleanAuthorNames: book.clean_author_names || '-',
+    totalPagesInSeries: book.total_pages_in_series || '-',
     audioScore: String(audioScore(book)),
     wordCount: fmtNumber(wordCount(book)),
+    totalHours: book.total_hours || (profile.length ? String(profile.length) : '-'),
+    goodreadLink: book.goodread_link || '-',
+    seriesBook1: book.series_book_1 || '-',
+    seriesLink: book.series_link || '-',
+    grBook1Rating: book.gr_book_1_rating || '-',
+    grBook2Rating: book.gr_book_2_rating || '-',
+    grBook3Rating: book.gr_book_3_rating || '-',
+    grBook4Rating: book.gr_book_4_rating || '-',
+    grBook5Rating: book.gr_book_5_rating || '-',
+    grBook6Rating: book.gr_book_6_rating || '-',
+    grBook7Rating: book.gr_book_7_rating || '-',
+    grBook8Rating: book.gr_book_8_rating || '-',
+    grBook9Rating: book.gr_book_9_rating || '-',
+    grBook10Rating: book.gr_book_10_rating || '-',
+    finalList: book.final_list || '-',
+    rationale: book.rationale || '-',
+    remarks: book.remarks || '-',
+    synopsis: book.synopsis || '-',
     email: contactEmail(book) || '-',
+    contactForms: book.contact?.contact_forms || '-',
+    publisherDetails: book.contact?.publisher_details || '-',
   };
-  return values[key];
+  return values[key] || '-';
+}
+
+interface MappingColumn {
+  key: MappingFilterKey;
+  label: string;
+  sortKey?: MappingSortKey;
+  className?: string;
+}
+
+const MAPPING_COLUMNS: MappingColumn[] = [
+  { key: 'title', label: 'Title', sortKey: 'title' },
+  { key: 'author', label: 'Author', sortKey: 'author' },
+  { key: 'authorName', label: 'Author name' },
+  { key: 'publisher', label: 'Publisher' },
+  { key: 'publisherName', label: 'Publisher name' },
+  { key: 'source', label: 'Source' },
+  { key: 'rating', label: 'Rating', sortKey: 'rating' },
+  { key: 'amazonReviews', label: 'No. of rating', sortKey: 'amazonReviews' },
+  { key: 'goodreadsRating', label: 'Goodreads rating' },
+  { key: 'reviews', label: 'GR Ratings', sortKey: 'rating_count' },
+  { key: 'tier', label: 'Tier', sortKey: 'tier' },
+  { key: 'length', label: 'Length', sortKey: 'length' },
+  { key: 'mgMin', label: 'MG Min' },
+  { key: 'mgMax', label: 'MG Max' },
+  { key: 'trope', label: 'Trope' },
+  { key: 'revShareMin', label: 'Rev min' },
+  { key: 'revShareMax', label: 'Rev max' },
+  { key: 'publicationDate', label: 'Publication date' },
+  { key: 'partOfSeries', label: 'Part of series' },
+  { key: 'language', label: 'Language' },
+  { key: 'bestSellersRank', label: 'Best Sellers Rank' },
+  { key: 'printLength', label: 'Print Length' },
+  { key: 'bookNumber', label: 'Book number' },
+  { key: 'format', label: 'Format' },
+  { key: 'genre', label: 'Primary genre' },
+  { key: 'subGenre', label: 'Sub-genre' },
+  { key: 'type', label: 'Type' },
+  { key: 'seriesBooks', label: 'Series books' },
+  { key: 'seriesFlag', label: 'Series?' },
+  { key: 'cleanedSeriesName', label: 'Cleaned Series Name' },
+  { key: 'duplicatesBasisSeries', label: 'Duplicates basis series?' },
+  { key: 'authorCheck', label: 'Author Check' },
+  { key: 'cleanAuthorNames', label: 'Clean Author Names' },
+  { key: 'totalPagesInSeries', label: '# total pages in series' },
+  { key: 'wordCount', label: '# Total word count', sortKey: 'word_count' },
+  { key: 'totalHours', label: '# of Hrs' },
+  { key: 'audioScore', label: 'Audio score' },
+  { key: 'goodreadLink', label: 'Goodread Link', className: 'link-cell' },
+  { key: 'seriesBook1', label: 'Series Book 1', className: 'link-cell' },
+  { key: 'seriesLink', label: 'Series Link', className: 'link-cell' },
+  { key: 'grBook1Rating', label: 'GR Book 1 Rating' },
+  { key: 'grBook2Rating', label: 'GR Book 2 Rating' },
+  { key: 'grBook3Rating', label: 'GR Book 3 Rating' },
+  { key: 'grBook4Rating', label: 'GR Book 4 Rating' },
+  { key: 'grBook5Rating', label: 'GR Book 5 Rating' },
+  { key: 'grBook6Rating', label: 'GR Book 6 Rating' },
+  { key: 'grBook7Rating', label: 'GR Book 7 Rating' },
+  { key: 'grBook8Rating', label: 'GR Book 8 Rating' },
+  { key: 'grBook9Rating', label: 'GR Book 9 Rating' },
+  { key: 'grBook10Rating', label: 'GR Book 10 Rating' },
+  { key: 'finalList', label: 'Final List?' },
+  { key: 'rationale', label: 'Rationale', className: 'long-cell' },
+  { key: 'remarks', label: 'Remarks', className: 'long-cell' },
+  { key: 'synopsis', label: 'Synopsis', className: 'cell-synopsis' },
+  { key: 'email', label: 'Author email' },
+  { key: 'contactForms', label: 'Contact Forms', className: 'long-cell' },
+  { key: 'publisherDetails', label: "Publisher's details", className: 'long-cell' },
+];
+
+function renderMappingCell(book: Book, column: MappingColumn, patchBook: (bookId: number, patch: Partial<Book>) => void, genreOptions: string[]): ReactNode {
+  const value = mappingFilterValue(book, column.key);
+  switch (column.key) {
+    case 'title':
+      return <div className="cell-title" title={book.title}>{book.title}</div>;
+    case 'source':
+      return <span className={`tag ${sourceFor(book) === 'Amazon' ? 'tg-a' : 'tg-t'}`}>{sourceFor(book)}</span>;
+    case 'tier':
+      return <span className="tag tg-p">{value}</span>;
+    case 'length':
+      return bookLengthHours(book) ? `${bookLengthHours(book)}h` : '-';
+    case 'genre':
+      return (
+        <select className="tbl-select" value={book.genre || ''} onChange={(event) => patchBook(book.id, { genre: event.target.value })}>
+          <option value="">Unmapped</option>
+          {genreOptions.map((genre) => <option key={genre}>{genre}</option>)}
+        </select>
+      );
+    case 'subGenre':
+      return <input className="table-input" value={book.sub_genre || ''} onChange={(event) => patchBook(book.id, { sub_genre: event.target.value })} />;
+    case 'type':
+      return (
+        <select className="tbl-select" value={book.book_type || ''} onChange={(event) => patchBook(book.id, { book_type: event.target.value })}>
+          <option value="">Unknown</option><option>Series</option><option>Standalone</option><option>Anthology</option>
+        </select>
+      );
+    case 'audioScore':
+      return <AudioScore value={audioScore(book)} />;
+    case 'goodreadLink':
+    case 'seriesBook1':
+    case 'seriesLink':
+      return value !== '-' ? <a href={value} target="_blank" rel="noreferrer">Open</a> : '-';
+    case 'synopsis':
+      return <span title={book.synopsis || ''}>{book.synopsis || '-'}</span>;
+    default:
+      return value;
+  }
 }
 
 function genreTagClass(genre = ''): string {
@@ -538,6 +691,7 @@ function App() {
     max_series_books: 10,
     min_audio_score: 60,
   });
+  const [tierRules, setTierRules] = useState<TierRule[]>(DEFAULT_TIER_RULES);
   const [activeGenres, setActiveGenres] = useState<string[]>([]);
   const [activeTypes, setActiveTypes] = useState<string[]>([]);
   const [selectedEvalId, setSelectedEvalId] = useState<number | null>(null);
@@ -902,18 +1056,31 @@ function App() {
     }
   }
 
-  async function applyTierMapping() {
+  async function applyTierMapping(rules = tierRules, exportAfterApply = false) {
     if (!batch) return;
     setError('');
     try {
       const result = await api<{ total: number; tier_counts: Record<string, number> }>(`/batches/${batch.id}/tier-mapping/apply`, {
         method: 'POST',
+        body: JSON.stringify({
+          rules: rules.map((rule) => ({
+            tier: rule.tier,
+            min_gr_ratings: rule.minGrRatings,
+            min_length_hours: rule.minLengthHours,
+            mg_min: rule.mgMin,
+            mg_max: rule.mgMax,
+          })),
+          shortlisted_only: false,
+        }),
       });
       await Promise.all([loadBooks(batch.id), loadSummary(batch.id), loadDataQuality(batch.id)]);
       const counts = Object.entries(result.tier_counts)
         .map(([tier, count]) => `${tier}: ${count}`)
         .join(', ');
       setNotice(`Tier mapping applied to ${result.total} books${counts ? ` (${counts})` : ''}.`);
+      if (exportAfterApply) {
+        await createExport('csv', 'final_csv');
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Could not apply tier mapping');
     }
@@ -1017,12 +1184,14 @@ function App() {
         return matchesTerm && matchesGenre && matchesColumnFilters;
       })
       .sort((left, right) => {
-        if (sortKey === 'title' || sortKey === 'author') return String(left[sortKey] || '').localeCompare(String(right[sortKey] || ''));
+        if (sortKey === 'title') return String(left.title || '').localeCompare(String(right.title || ''));
+        if (sortKey === 'author') return String(left.author || '').localeCompare(String(right.author || ''));
         if (sortKey === 'tier') return tierProfile(left).tier.localeCompare(tierProfile(right).tier);
         if (sortKey === 'length') return bookLengthHours(right) - bookLengthHours(left);
         if (sortKey === 'word_count') return wordCount(right) - wordCount(left);
         if (sortKey === 'rating_count') return goodreadsReviewCount(right) - goodreadsReviewCount(left);
-        return Number(right[sortKey] || 0) - Number(left[sortKey] || 0);
+        if (sortKey === 'amazonReviews') return (right.rating_count || 0) - (left.rating_count || 0);
+        return parseMetric(mappingFilterValue(right, sortKey)) - parseMetric(mappingFilterValue(left, sortKey));
       });
   }, [books, search, genreFilter, columnFilters, sortKey]);
 
@@ -1052,8 +1221,8 @@ function App() {
             <div className="sidebar-label">Pipeline</div>
             <NavItem page="scrapping" activePage={activePage} onClick={nav} icon="↗" label="Scraping" badge={summary?.total_sources || 0} />
             <NavItem page="mapping" activePage={activePage} onClick={nav} icon="▦" label="Data & Genre Mapping" badge={summary?.total_books || 0} />
-            <NavItem page="tier" activePage={activePage} onClick={nav} icon="▣" label="Tier Mapping" badge={books.filter((book) => book.tier).length} green />
             <NavItem page="benchmark" activePage={activePage} onClick={nav} icon="◎" label="Benchmark Filters" badge={summary?.shortlisted_books || 0} green />
+            <NavItem page="tier" activePage={activePage} onClick={nav} icon="▣" label="Tier Mapping" badge={books.filter((book) => book.tier).length} green />
           </div>
           <div className="sidebar-section">
             <div className="sidebar-label">Action</div>
@@ -1140,6 +1309,9 @@ function App() {
             <TierMappingPage
               books={books}
               applyTierMapping={applyTierMapping}
+              createExport={createExport}
+              tierRules={tierRules}
+              setTierRules={setTierRules}
               nav={nav}
             />
           )}
@@ -1765,6 +1937,8 @@ function FilterHeader({
   filters,
   onFilter,
   onSort,
+  tierRules = DEFAULT_TIER_RULES,
+  usePersistedTier = true,
 }: {
   label: string;
   filterKey: MappingFilterKey;
@@ -1772,11 +1946,13 @@ function FilterHeader({
   filters: Partial<Record<MappingFilterKey, string>>;
   onFilter: (key: MappingFilterKey, value: string) => void;
   onSort?: () => void;
+  tierRules?: TierRule[];
+  usePersistedTier?: boolean;
 }) {
   const options = useMemo(() => {
-    const values = Array.from(new Set(books.map((book) => mappingFilterValue(book, filterKey)).filter((value) => value && value !== '-')));
+    const values = Array.from(new Set(books.map((book) => mappingFilterValue(book, filterKey, tierRules, usePersistedTier)).filter((value) => value && value !== '-')));
     return values.sort((left, right) => left.localeCompare(right, undefined, { numeric: true, sensitivity: 'base' })).slice(0, 500);
-  }, [books, filterKey]);
+  }, [books, filterKey, tierRules, usePersistedTier]);
 
   return (
     <th className={filters[filterKey] ? 'filtered-th' : ''}>
@@ -1852,7 +2028,7 @@ function MappingPage({
     <section className="page active">
       <PageHead title="Data Cleaning & Genre Mapping" desc="Review scraped records, assign taxonomy, and verify audio adaptability scores.">
         <button className="btn btn-sm" onClick={() => runJob('enrich-goodreads')} disabled={jobRunning}>◎ Enrich Goodreads</button>
-        <button className="btn btn-primary btn-sm" onClick={() => nav('tier')}>Proceed to Tier Mapping →</button>
+        <button className="btn btn-primary btn-sm" onClick={() => nav('benchmark')}>Proceed to Benchmark →</button>
       </PageHead>
 
       <div className="metrics">
@@ -1886,59 +2062,32 @@ function MappingPage({
 
       <div className="card table-card">
         <div className="tbl-wrap">
-          <table>
+          <table className="mapping-table">
             <thead>
               <tr>
                 <th><input type="checkbox" /></th>
-                <FilterHeader label="Title" filterKey="title" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('title')} />
-                <FilterHeader label="Author" filterKey="author" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('author')} />
-                <FilterHeader label="Source" filterKey="source" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
-                <FilterHeader label="Rating" filterKey="rating" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('rating')} />
-                <FilterHeader label="GR Ratings" filterKey="reviews" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('rating_count')} />
-                <FilterHeader label="Tier" filterKey="tier" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('tier')} />
-                <FilterHeader label="Length" filterKey="length" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('length')} />
-                <FilterHeader label="MG Min" filterKey="mgMin" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
-                <FilterHeader label="MG Max" filterKey="mgMax" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
-                <FilterHeader label="Primary genre" filterKey="genre" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
-                <FilterHeader label="Sub-genre" filterKey="subGenre" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
-                <FilterHeader label="Type" filterKey="type" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
-                <FilterHeader label="Series books" filterKey="seriesBooks" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
-                <FilterHeader label="Audio score" filterKey="audioScore" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
-                <FilterHeader label="Word count" filterKey="wordCount" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} onSort={() => setSortKey('word_count')} />
-                <th>Synopsis</th>
-                <FilterHeader label="Author email" filterKey="email" books={allBooks} filters={columnFilters} onFilter={setColumnFilter} />
+                {MAPPING_COLUMNS.map((column) => (
+                  <FilterHeader
+                    key={column.key}
+                    label={column.label}
+                    filterKey={column.key}
+                    books={allBooks}
+                    filters={columnFilters}
+                    onFilter={setColumnFilter}
+                    onSort={column.sortKey ? () => setSortKey(column.sortKey || column.key) : undefined}
+                  />
+                ))}
               </tr>
             </thead>
             <tbody>
               {books.map((book) => (
                 <tr key={book.id}>
                   <td><input type="checkbox" defaultChecked={book.shortlisted} /></td>
-                  <td><div className="cell-title" title={book.title}>{book.title}</div></td>
-                  <td>{book.author}</td>
-                  <td><span className={`tag ${sourceFor(book) === 'Amazon' ? 'tg-a' : 'tg-t'}`}>{sourceFor(book)}</span></td>
-                  <td>{book.rating?.toFixed(1) || '-'}</td>
-                  <td>{fmtNumber(goodreadsReviewCount(book))}</td>
-                  <td><span className="tag tg-p">{tierProfile(book).tier}</span></td>
-                  <td>{bookLengthHours(book) ? `${bookLengthHours(book)}h` : '-'}</td>
-                  <td>{tierProfile(book).mgMin}</td>
-                  <td>{tierProfile(book).mgMax}</td>
-                  <td>
-                    <select className="tbl-select" value={book.genre || ''} onChange={(event) => patchBook(book.id, { genre: event.target.value })}>
-                      <option value="">Unmapped</option>
-                      {genreOptions.map((genre) => <option key={genre}>{genre}</option>)}
-                    </select>
-                  </td>
-                  <td><input className="table-input" value={book.sub_genre || ''} onChange={(event) => patchBook(book.id, { sub_genre: event.target.value })} /></td>
-                  <td>
-                    <select className="tbl-select" value={book.book_type || ''} onChange={(event) => patchBook(book.id, { book_type: event.target.value })}>
-                      <option value="">Unknown</option><option>Series</option><option>Standalone</option><option>Anthology</option>
-                    </select>
-                  </td>
-                  <td>{seriesCount(book)}</td>
-                  <td><AudioScore value={audioScore(book)} /></td>
-                  <td>{fmtNumber(wordCount(book))}</td>
-                  <td className="cell-synopsis">{book.synopsis || '-'}</td>
-                  <td className="email-cell">{contactEmail(book) || '-'}</td>
+                  {MAPPING_COLUMNS.map((column) => (
+                    <td key={`${book.id}-${column.key}`} className={column.className}>
+                      {renderMappingCell(book, column, patchBook, genreOptions)}
+                    </td>
+                  ))}
                 </tr>
               ))}
             </tbody>
@@ -1949,7 +2098,7 @@ function MappingPage({
       <div className="action-row">
         <button className="btn" onClick={() => nav('scrapping')}>← Back to scraping</button>
         <div className="spacer" />
-        <button className="btn btn-primary" onClick={() => nav('tier')}>Next: Tier Mapping →</button>
+        <button className="btn btn-primary" onClick={() => nav('benchmark')}>Next: Benchmark Filters →</button>
       </div>
     </section>
   );
@@ -1958,29 +2107,39 @@ function MappingPage({
 function TierMappingPage({
   books,
   applyTierMapping,
+  createExport,
+  tierRules,
+  setTierRules,
   nav,
 }: {
   books: Book[];
-  applyTierMapping: () => void;
+  applyTierMapping: (rules?: TierRule[], exportAfterApply?: boolean) => void;
+  createExport: (format: 'csv' | 'xlsx' | 'pdf' | 'json', profile?: string) => void;
+  tierRules: TierRule[];
+  setTierRules: (rules: TierRule[]) => void;
   nav: (page: PageId) => void;
 }) {
   const [filters, setFilters] = useState<Partial<Record<MappingFilterKey, string>>>({});
   const mappedCount = books.filter((book) => book.tier).length;
   const goodreadsCount = books.filter((book) => goodreadsReviewCount(book) > 0).length;
-  const highTierCount = books.filter((book) => ['Tier 1', 'Tier 2'].includes(tierProfile(book).tier)).length;
+  const highTierCount = books.filter((book) => ['Tier 1', 'Tier 2'].includes(tierProfile(book, tierRules, false).tier)).length;
   const tierCounts = useMemo(() => {
-    const counts: Record<string, number> = { 'Tier 1': 0, 'Tier 2': 0, 'Tier 3': 0, 'Tier 4': 0, 'Tier 5': 0 };
+    const counts: Record<string, number> = {};
     books.forEach((book) => {
-      const tier = tierProfile(book).tier;
+      const tier = tierProfile(book, tierRules, false).tier;
       counts[tier] = (counts[tier] || 0) + 1;
     });
     return counts;
-  }, [books]);
+  }, [books, tierRules]);
   const visibleBooks = useMemo(
-    () => books.filter((book) => (Object.entries(filters) as [MappingFilterKey, string][]).every(([key, value]) => !value || mappingFilterValue(book, key) === value)),
-    [books, filters],
+    () => books.filter((book) => (Object.entries(filters) as [MappingFilterKey, string][]).every(([key, value]) => !value || mappingFilterValue(book, key, tierRules, false) === value)),
+    [books, filters, tierRules],
   );
   const hasFilters = Object.values(filters).some(Boolean);
+
+  function updateRule(index: number, patch: Partial<TierRule>) {
+    setTierRules(tierRules.map((rule, ruleIndex) => (ruleIndex === index ? { ...rule, ...patch } : rule)));
+  }
 
   function setFilter(key: MappingFilterKey, value: string) {
     setFilters((current) => {
@@ -1993,9 +2152,9 @@ function TierMappingPage({
 
   return (
     <section className="page active">
-      <PageHead title="Tier Mapping" desc="Apply the final GR rating and length rules into the CSV columns after Goodreads enrichment is complete.">
-        <button className="btn btn-primary btn-sm" onClick={applyTierMapping} disabled={!books.length}>Apply Tier Mapping</button>
-        <button className="btn btn-sm" onClick={() => nav('export')}>Final CSV →</button>
+      <PageHead title="Tier Mapping" desc="Apply editable GR rating-count and length rules after benchmark filters are set.">
+        <button className="btn btn-primary btn-sm" onClick={() => applyTierMapping(tierRules, false)} disabled={!books.length}>Apply rules</button>
+        <button className="btn btn-sm" onClick={() => applyTierMapping(tierRules, true)} disabled={!books.length}>Apply & CSV</button>
       </PageHead>
 
       <div className="metrics">
@@ -2006,13 +2165,28 @@ function TierMappingPage({
       </div>
 
       <div className="card">
-        <div className="card-title">Tier rule set <span className="tag tg-t card-tag">Needgap</span></div>
-        <div className="field-grid">
-          <span className="field-chip on">Tier 1 · GR 20,000+ · Length 80+ · MG 10k-15k</span>
-          <span className="field-chip on">Tier 2 · GR 20,000+ · Length 50+ · MG 10k-12.5k</span>
-          <span className="field-chip on">Tier 3 · GR 5,000+ · Length 80+ · MG 7.5k-10k</span>
-          <span className="field-chip on">Tier 4 · GR 5,000+ · Length 50+ · MG 3k-5k</span>
-          <span className="field-chip on">Tier 5 · Otherwise · No MG</span>
+        <div className="card-title">Editable tier rule set <span className="tag tg-t card-tag">Needgap</span></div>
+        <div className="tier-rule-grid">
+          <div className="tier-rule-head">Tier</div>
+          <div className="tier-rule-head">Min GR ratings</div>
+          <div className="tier-rule-head">Min length hrs</div>
+          <div className="tier-rule-head">MG min</div>
+          <div className="tier-rule-head">MG max</div>
+          {tierRules.map((rule, index) => (
+            <div className="tier-rule-row" key={`${rule.tier}-${index}`}>
+              <input value={rule.tier} onChange={(event) => updateRule(index, { tier: event.target.value })} />
+              <input type="number" min={0} value={rule.minGrRatings} onChange={(event) => updateRule(index, { minGrRatings: Number(event.target.value) || 0 })} />
+              <input type="number" min={0} value={rule.minLengthHours} onChange={(event) => updateRule(index, { minLengthHours: Number(event.target.value) || 0 })} />
+              <input value={rule.mgMin} onChange={(event) => updateRule(index, { mgMin: event.target.value })} />
+              <input value={rule.mgMax} onChange={(event) => updateRule(index, { mgMax: event.target.value })} />
+            </div>
+          ))}
+        </div>
+        <div className="action-row compact">
+          <button className="btn btn-sm" onClick={() => setTierRules(DEFAULT_TIER_RULES)}>Reset default rules</button>
+          <div className="spacer" />
+          <button className="btn btn-primary btn-sm" onClick={() => applyTierMapping(tierRules, false)} disabled={!books.length}>Enter rules</button>
+          <button className="btn btn-sm" onClick={() => createExport('csv', 'final_csv')} disabled={!books.length}>Create Final CSV</button>
         </div>
         <div className="quality-chips">
           {Object.entries(tierCounts).map(([tier, count]) => (
@@ -2038,11 +2212,11 @@ function TierMappingPage({
               <tr>
                 <FilterHeader label="Title" filterKey="title" books={books} filters={filters} onFilter={setFilter} />
                 <FilterHeader label="Author" filterKey="author" books={books} filters={filters} onFilter={setFilter} />
-                <FilterHeader label="GR Ratings" filterKey="reviews" books={books} filters={filters} onFilter={setFilter} />
-                <FilterHeader label="Length" filterKey="length" books={books} filters={filters} onFilter={setFilter} />
-                <FilterHeader label="Tier" filterKey="tier" books={books} filters={filters} onFilter={setFilter} />
-                <FilterHeader label="MG Min" filterKey="mgMin" books={books} filters={filters} onFilter={setFilter} />
-                <FilterHeader label="MG Max" filterKey="mgMax" books={books} filters={filters} onFilter={setFilter} />
+                <FilterHeader label="GR Ratings" filterKey="reviews" books={books} filters={filters} onFilter={setFilter} tierRules={tierRules} usePersistedTier={false} />
+                <FilterHeader label="Length" filterKey="length" books={books} filters={filters} onFilter={setFilter} tierRules={tierRules} usePersistedTier={false} />
+                <FilterHeader label="Tier" filterKey="tier" books={books} filters={filters} onFilter={setFilter} tierRules={tierRules} usePersistedTier={false} />
+                <FilterHeader label="MG Min" filterKey="mgMin" books={books} filters={filters} onFilter={setFilter} tierRules={tierRules} usePersistedTier={false} />
+                <FilterHeader label="MG Max" filterKey="mgMax" books={books} filters={filters} onFilter={setFilter} tierRules={tierRules} usePersistedTier={false} />
                 <th>Trope</th>
                 <th>Rev Min</th>
                 <th>Rev Max</th>
@@ -2051,7 +2225,7 @@ function TierMappingPage({
             </thead>
             <tbody>
               {visibleBooks.map((book) => {
-                const profile = tierProfile(book);
+                const profile = tierProfile(book, tierRules, false);
                 return (
                   <tr key={book.id}>
                     <td><div className="cell-title" title={book.title}>{book.title}</div></td>
@@ -2074,9 +2248,9 @@ function TierMappingPage({
       </div>
 
       <div className="action-row">
-        <button className="btn" onClick={() => nav('mapping')}>← Back to mapping</button>
+        <button className="btn" onClick={() => nav('benchmark')}>← Back to benchmark</button>
         <div className="spacer" />
-        <button className="btn btn-primary" onClick={() => nav('benchmark')}>Next: Benchmark Filters →</button>
+        <button className="btn btn-primary" onClick={() => nav('export')}>Next: Export →</button>
       </div>
     </section>
   );
@@ -2117,7 +2291,7 @@ function BenchmarkPage({
     <section className="page active">
       <PageHead title="Benchmark Filters" desc="Tune quantitative and qualitative criteria to arrive at your final shortlist.">
         <span className="tag tg-t head-tag">{shortlisted.length} shortlisted</span>
-        <button className="btn btn-primary btn-sm" onClick={() => nav('outreach')}>Next: Outreach →</button>
+        <button className="btn btn-primary btn-sm" onClick={() => nav('tier')}>Next: Tier Mapping →</button>
       </PageHead>
 
       <div className="benchmark-layout">
@@ -2172,9 +2346,9 @@ function BenchmarkPage({
       </div>
 
       <div className="action-row">
-        <button className="btn" onClick={() => nav('tier')}>← Back to tier mapping</button>
+        <button className="btn" onClick={() => nav('mapping')}>← Back to mapping</button>
         <div className="spacer" />
-        <button className="btn btn-primary" onClick={() => nav('outreach')}>Next: Author Outreach →</button>
+        <button className="btn btn-primary" onClick={() => nav('tier')}>Next: Tier Mapping →</button>
       </div>
     </section>
   );
@@ -2245,7 +2419,7 @@ function OutreachPage({
         </div>
       </div>
       <div className="action-row">
-        <button className="btn" onClick={() => nav('benchmark')}>← Back to filters</button>
+        <button className="btn" onClick={() => nav('tier')}>← Back to tier mapping</button>
         <div className="spacer" />
         <button className="btn btn-primary" onClick={() => nav('export')}>Next: Export →</button>
       </div>

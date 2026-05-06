@@ -24,6 +24,13 @@ WORDS_PER_HOUR = 10000
 DEFAULT_TROPE = "Needgap"
 DEFAULT_REV_SHARE_MIN = "13%"
 DEFAULT_REV_SHARE_MAX = "18%"
+DEFAULT_TIER_RULES = [
+    {"tier": "Tier 1", "min_gr_ratings": 20_000, "min_length_hours": 80, "mg_min": "10k", "mg_max": "15k"},
+    {"tier": "Tier 2", "min_gr_ratings": 20_000, "min_length_hours": 50, "mg_min": "10k", "mg_max": "12.5k"},
+    {"tier": "Tier 3", "min_gr_ratings": 5_000, "min_length_hours": 80, "mg_min": "7.5k", "mg_max": "10k"},
+    {"tier": "Tier 4", "min_gr_ratings": 5_000, "min_length_hours": 50, "mg_min": "3k", "mg_max": "5k"},
+    {"tier": "Tier 5", "min_gr_ratings": 0, "min_length_hours": 0, "mg_min": "No MG", "mg_max": "No MG"},
+]
 
 GENERIC_CATEGORIES = {
     "",
@@ -135,6 +142,28 @@ def _parse_int(value) -> int | None:
         return None
 
 
+def normalized_tier_rules(rules: list[dict] | None = None) -> list[dict[str, object]]:
+    normalized: list[dict[str, object]] = []
+    for index, rule in enumerate(rules or DEFAULT_TIER_RULES):
+        tier = _clean(str(rule.get("tier") or f"Tier {index + 1}"))
+        min_gr_ratings = _parse_int(rule.get("min_gr_ratings")) or 0
+        min_length_hours = _parse_int(rule.get("min_length_hours")) or 0
+        mg_min = _clean(str(rule.get("mg_min") or ""))
+        mg_max = _clean(str(rule.get("mg_max") or ""))
+        if not tier:
+            continue
+        normalized.append(
+            {
+                "tier": tier,
+                "min_gr_ratings": max(min_gr_ratings, 0),
+                "min_length_hours": max(min_length_hours, 0),
+                "mg_min": mg_min,
+                "mg_max": mg_max,
+            }
+        )
+    return normalized or list(DEFAULT_TIER_RULES)
+
+
 def _derived_hours(book: Book) -> int | None:
     hours = _parse_int(book.total_hours)
     if hours:
@@ -145,7 +174,7 @@ def _derived_hours(book: Book) -> int | None:
     return None
 
 
-def commissioning_tier_profile(book: Book) -> dict[str, str]:
+def commissioning_tier_profile(book: Book, rules: list[dict] | None = None) -> dict[str, str]:
     """Return the Pocket FM MG tier profile for a mapped book.
 
     Tiers are based on Goodreads review count and the calculated length in hours.
@@ -156,16 +185,14 @@ def commissioning_tier_profile(book: Book) -> dict[str, str]:
     reviews = _parse_int(book.goodreads_rating_count) or 0
     hours_value = hours or 0
 
-    if reviews >= 20_000 and hours_value >= 80:
-        tier, mg_min, mg_max = "Tier 1", "10k", "15k"
-    elif reviews >= 20_000 and hours_value >= 50:
-        tier, mg_min, mg_max = "Tier 2", "10k", "12.5k"
-    elif reviews >= 5_000 and hours_value >= 80:
-        tier, mg_min, mg_max = "Tier 3", "7.5k", "10k"
-    elif reviews >= 5_000 and hours_value >= 50:
-        tier, mg_min, mg_max = "Tier 4", "3k", "5k"
-    else:
-        tier, mg_min, mg_max = "Tier 5", "No MG", "No MG"
+    selected_rule = normalized_tier_rules(rules)[-1]
+    for rule in normalized_tier_rules(rules):
+        if reviews >= int(rule["min_gr_ratings"]) and hours_value >= int(rule["min_length_hours"]):
+            selected_rule = rule
+            break
+    tier = str(selected_rule["tier"])
+    mg_min = str(selected_rule["mg_min"] or "No MG")
+    mg_max = str(selected_rule["mg_max"] or "No MG")
 
     return {
         "Tier": tier,
@@ -179,11 +206,11 @@ def commissioning_tier_profile(book: Book) -> dict[str, str]:
     }
 
 
-def apply_tier_mapping(book: Book) -> dict[str, str]:
+def apply_tier_mapping(book: Book, rules: list[dict] | None = None) -> dict[str, str]:
     """Persist the final Pocket FM tier and MG columns onto a book row."""
     if _derived_hours(book) is None:
         apply_metric_mapping(book)
-    profile = commissioning_tier_profile(book)
+    profile = commissioning_tier_profile(book, rules)
     book.tier = profile["Tier"]
     book.gr_ratings = profile["GR Ratings"]
     book.trope = profile["Trope"]

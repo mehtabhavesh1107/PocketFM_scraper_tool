@@ -324,12 +324,25 @@ class CommissioningApiTests(unittest.TestCase):
             self.assertEqual(tier.status_code, 200)
             self.assertEqual(tier.json()["tier_counts"]["Tier 1"], 1)
 
+            custom_tier = await self._request(
+                "POST",
+                f"/api/batches/{batch_id}/tier-mapping/apply",
+                json={
+                    "rules": [
+                        {"tier": "Premium", "min_gr_ratings": 24000, "min_length_hours": 80, "mg_min": "20k", "mg_max": "25k"},
+                        {"tier": "Standard", "min_gr_ratings": 0, "min_length_hours": 0, "mg_min": "No MG", "mg_max": "No MG"},
+                    ]
+                },
+            )
+            self.assertEqual(custom_tier.status_code, 200)
+            self.assertEqual(custom_tier.json()["tier_counts"]["Premium"], 1)
+
             refreshed = await self._request("GET", f"/api/batches/{batch_id}/books")
             row = refreshed.json()["items"][0]
-            self.assertEqual(row["tier"], "Tier 1")
+            self.assertEqual(row["tier"], "Premium")
             self.assertEqual(row["length"], "85")
-            self.assertEqual(row["mg_min"], "10k")
-            self.assertEqual(row["mg_max"], "15k")
+            self.assertEqual(row["mg_min"], "20k")
+            self.assertEqual(row["mg_max"], "25k")
 
             export = await self._request(
                 "POST",
@@ -342,6 +355,9 @@ class CommissioningApiTests(unittest.TestCase):
             header = export_path.read_text(encoding="utf-8").splitlines()[0]
             self.assertIn("# of Hrs", header)
             self.assertIn("Goodread Link", header)
+            self.assertIn("Author name", header)
+            self.assertIn("Publisher name", header)
+            self.assertIn("Book 10 No Of Rating", header)
 
         import asyncio
 

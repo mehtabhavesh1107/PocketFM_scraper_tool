@@ -341,6 +341,19 @@ class BenchmarkResponse(BaseModel):
     matched_ids: list[int]
 
 
+class TierRule(BaseModel):
+    tier: str
+    min_gr_ratings: int = Field(default=0, ge=0)
+    min_length_hours: int = Field(default=0, ge=0)
+    mg_min: str = ""
+    mg_max: str = ""
+
+
+class TierMappingRequest(BaseModel):
+    rules: list[TierRule] = Field(default_factory=list)
+    shortlisted_only: bool = False
+
+
 class TierMappingResponse(BaseModel):
     total: int
     tier_counts: dict[str, int]

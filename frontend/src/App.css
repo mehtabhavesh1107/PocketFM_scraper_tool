@@ -211,6 +211,7 @@ label.field-label { font-size:11px;color:var(--g600);display:block;margin-bottom
 
 .tbl-wrap { overflow-x:auto; }
 table { width:100%;border-collapse:collapse;font-size:12px; }
+.mapping-table { min-width:5200px; }
 th { background:var(--g50);color:var(--g600);font-weight:500;text-align:left;padding:8px 10px;border-bottom:0.5px solid #e0ddd4;white-space:nowrap;font-size:10px;text-transform:uppercase;letter-spacing:0.04em;cursor:pointer;user-select:none; }
 th:hover { background:#E8E6DE; }
 th.filtered-th { background:var(--p50);color:var(--p800); }
@@ -224,6 +225,9 @@ tr:hover td { background:#fafaf8; }
 .cell-title { font-weight:500;max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
 .cell-muted { color:var(--g600);font-size:11px; }
 .cell-synopsis { max-width:180px;font-size:11px;color:var(--g600);line-height:1.4;overflow:hidden;text-overflow:ellipsis;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical; }
+.long-cell { max-width:220px;font-size:11px;color:var(--g600);line-height:1.4;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.link-cell { max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap; }
+.link-cell a { color:var(--b600);text-decoration:none;font-weight:500; }
 .tbl-select { width:auto;padding:3px 7px;font-size:11px;border-radius:5px; }
 .table-input { min-width: 130px; padding:3px 7px!important;font-size:11px!important;border-radius:5px!important; }
 .email-cell { font-size:11px;color:var(--b600);white-space:nowrap; }
@@ -233,6 +237,12 @@ tr:hover td { background:#fafaf8; }
 .search-wrap { position:relative;flex:1; }
 .search-input { padding-left:30px!important; }
 .search-icon { position:absolute;left:10px;top:50%;transform:translateY(-50%);color:var(--g400);font-size:13px;pointer-events:none; }
+
+.tier-rule-grid { display:grid;grid-template-columns:1fr 1fr 1fr 1fr 1fr;gap:6px;align-items:center;margin-bottom:10px; }
+.tier-rule-head { font-size:10px;color:var(--g600);text-transform:uppercase;letter-spacing:.04em;padding:0 2px; }
+.tier-rule-row { display:contents; }
+.tier-rule-row input { padding:5px 8px;font-size:12px;border-radius:6px; }
+.action-row.compact { margin-top:8px;margin-bottom:10px; }
 
 .prog-wrap { background:#f1efe8;border-radius:4px;height:4px;overflow:hidden;flex:1;min-width:160px; }
 .prog-bar { height:4px;background:var(--p600);border-radius:4px;width:0%;transition:width 0.35s ease; }

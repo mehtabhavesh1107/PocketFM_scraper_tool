@@ -101,17 +101,31 @@ Review scraped rows, search/filter the book table, inspect source/provenance fie
 
 This page is also where low-confidence Goodreads matches can be reviewed and accepted.
 
+The mapping table shows the full operational row set used by exports, including author, publisher, Amazon rating/review count, Goodreads average rating, Goodreads rating count, tier fields, series fields, series book ratings, contact fields, and notes. Each visible column has a dropdown filter in its header so rows can be narrowed by the values already present in the run.
+
 ### Tier Mapping
 
-Applies final Goodreads rating and length rules into export columns.
+Applies final Goodreads rating-count and length rules into export columns after benchmark filters are set.
 
-Current rule set:
+Default rule set:
 
 - Tier 1: GR ratings 20,000+ and length 80+ hours, MG 10k-15k.
 - Tier 2: GR ratings 20,000+ and length 50+ hours, MG 10k-12.5k.
 - Tier 3: GR ratings 5,000+ and length 80+ hours, MG 7.5k-10k.
 - Tier 4: GR ratings 5,000+ and length 50+ hours, MG 3k-5k.
 - Tier 5: all other rows, no MG.
+
+The UI lets these tier names, GR rating-count thresholds, length thresholds, and MG values be edited before applying the mapping. The backend receives the edited rules and stamps the final tier columns onto the books.
+
+Column meanings:
+
+- `Rating`: Amazon star rating when available.
+- `no. of rating`: Amazon review/rating count when available.
+- `Goodreads rating`: Goodreads average star rating for the resolved Goodreads book.
+- `Goodreads no of rating`: Goodreads rating/review count for the resolved Goodreads book.
+- `GR Ratings`: the Goodreads rating/review count used by the tier mapping rules.
+- `GR Book 1 Rating` through `GR Book 10 Rating`: Goodreads average star ratings for books in the detected series when available.
+- `Book 1 No Of Rating` through `Book 10 No Of Rating`: Goodreads rating/review counts for those series books when available.
 
 ### Benchmark Filters
 

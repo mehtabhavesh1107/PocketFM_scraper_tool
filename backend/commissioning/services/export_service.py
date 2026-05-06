@@ -24,10 +24,12 @@ SAMPLE_COMPATIBLE_COLUMNS = [
     "Rating",
     "no. of rating",
     "Publisher",
+    "Publisher name",
     "Publication date",
     "Part of series",
     "Language",
     "Author",
+    "Author name",
     "Best Sellers Rank",
     "Customer Reviews",
     "Goodreads rating",
@@ -67,6 +69,17 @@ SAMPLE_COMPATIBLE_COLUMNS = [
     "GR Book 8 Rating",
     "GR Book 9 Rating",
     "GR Book 1O Rating",
+    "GR Book 10 Rating",
+    "Book 1 No Of Rating",
+    "Book 2 No Of Rating",
+    "Book 3 No Of Rating",
+    "Book 4 No Of Rating",
+    "Book 5 No Of Rating",
+    "Book 6 No Of Rating",
+    "Book 7 No Of Rating",
+    "Book 8 No Of Rating",
+    "Book 9 No Of Rating",
+    "Book 10 No Of Rating",
     "Final List?",
     "Rationale",
     "Scope?",
@@ -281,6 +294,7 @@ def apply_requested_mapped_columns(row: dict, book: Book) -> None:
 
     values = {
         "Sub Genre": _filled(book.sub_genre),
+        "Author name": _filled(book.author),
         "Published Year": _year_from(payload.get("Published Year"), payload.get("Publication"), book.publication_date, book.title),
         "Language": _filled(book.language, "English"),
         "Publisher name": _filled(book.publisher or payload.get("Publisher name")),
@@ -310,6 +324,16 @@ def apply_requested_mapped_columns(row: dict, book: Book) -> None:
         "Book8 No Of Rating": _rating_count_for(book, 8),
         "Book9 No Of Rating": _rating_count_for(book, 9),
         "Book10 No Of Rating": _rating_count_for(book, 10),
+        "Book 1 No Of Rating": _rating_count_for(book, 1),
+        "Book 2 No Of Rating": _rating_count_for(book, 2),
+        "Book 3 No Of Rating": _rating_count_for(book, 3),
+        "Book 4 No Of Rating": _rating_count_for(book, 4),
+        "Book 5 No Of Rating": _rating_count_for(book, 5),
+        "Book 6 No Of Rating": _rating_count_for(book, 6),
+        "Book 7 No Of Rating": _rating_count_for(book, 7),
+        "Book 8 No Of Rating": _rating_count_for(book, 8),
+        "Book 9 No Of Rating": _rating_count_for(book, 9),
+        "Book 10 No Of Rating": _rating_count_for(book, 10),
         "Book 1 Goodreads Link": _filled(book.series_book_1 or book.goodread_link),
         "Series Link": _filled(book.series_link),
         "Book Url": _filled(book.amazon_url or book.url or book.series_book_1),
@@ -388,10 +412,12 @@ def flatten_book(book: Book, columns: list[str] | None = None) -> dict:
     _set(row, "Rating", rating_value)
     _set(row, "no. of rating", rating_count_value)
     _set(row, "Publisher", _clean_export_text(book.publisher))
+    _set(row, "Publisher name", _clean_export_text(book.publisher))
     _set(row, "Publication date", _clean_export_text(book.publication_date))
     _set(row, "Part of series", book.part_of_series)
     _set(row, "Language", book.language)
     _set(row, "Author", book.author)
+    _set(row, "Author name", book.author)
     _set(row, "Best Sellers Rank", _clean_rank(rank_value))
     _set(row, "Customer Reviews", customer_reviews)
     _set(row, "Goodreads rating", book.goodreads_rating)
@@ -430,6 +456,7 @@ def flatten_book(book: Book, columns: list[str] | None = None) -> dict:
     _set(row, "GR Book 8 Rating", book.gr_book_8_rating)
     _set(row, "GR Book 9 Rating", book.gr_book_9_rating)
     _set(row, "GR Book 1O Rating", book.gr_book_10_rating)
+    _set(row, "GR Book 10 Rating", book.gr_book_10_rating)
     _set(row, "Final List?", book.final_list)
     _set(row, "Rationale", book.rationale)
     apply_requested_mapped_columns(row, book)

@@ -33,6 +33,7 @@ from ..schemas import (
     SheetSyncRequest,
     SourceLinkCreate,
     SourceLinkRead,
+    TierMappingRequest,
     TierMappingResponse,
 )
 from ..services.curation_service import (
@@ -397,9 +398,16 @@ def benchmark_batch(batch_id: int, payload: BenchmarkRequest, workspace_id: str 
 
 
 @router.post("/batches/{batch_id}/tier-mapping/apply", response_model=TierMappingResponse)
-def apply_tier_mapping_batch(batch_id: int, workspace_id: str = Depends(get_workspace_id), db: Session = Depends(get_db)):
+def apply_tier_mapping_batch(
+    batch_id: int,
+    payload: TierMappingRequest | None = None,
+    workspace_id: str = Depends(get_workspace_id),
+    db: Session = Depends(get_db),
+):
     batch = _get_batch_or_404(db, batch_id, workspace_id)
-    return apply_tier_mapping_to_batch(db, batch.id)
+    payload = payload or TierMappingRequest()
+    rules = [rule.model_dump() for rule in payload.rules]
+    return apply_tier_mapping_to_batch(db, batch.id, rules=rules, shortlisted_only=payload.shortlisted_only)
 
 
 @router.get("/batches/{batch_id}/outreach", response_model=list[BookRead])
