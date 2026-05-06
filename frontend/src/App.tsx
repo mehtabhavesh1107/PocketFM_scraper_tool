@@ -558,7 +558,7 @@ const MAPPING_COLUMNS: MappingColumn[] = [
   { key: 'rating', label: 'Rating', sortKey: 'rating' },
   { key: 'amazonReviews', label: 'No. of rating', sortKey: 'amazonReviews' },
   { key: 'goodreadsRating', label: 'Goodreads rating' },
-  { key: 'reviews', label: 'GR Ratings', sortKey: 'rating_count' },
+  { key: 'reviews', label: 'GR rating count', sortKey: 'rating_count' },
   { key: 'tier', label: 'Tier', sortKey: 'tier' },
   { key: 'length', label: 'Length', sortKey: 'length' },
   { key: 'mgMin', label: 'MG Min' },
@@ -2159,7 +2159,7 @@ function TierMappingPage({
 
       <div className="metrics">
         <Metric icon="▤" value={String(books.length)} label="Books in batch" delta="Rows available" />
-        <Metric icon="◎" value={`${goodreadsCount}/${books.length || 0}`} label="GR ratings mapped" delta="Used for tier rules" />
+        <Metric icon="◎" value={`${goodreadsCount}/${books.length || 0}`} label="GR count mapped" delta="Used for tier rules" />
         <Metric icon="▣" value={String(mappedCount)} label="Rows stamped" delta={`${Math.max(books.length - mappedCount, 0)} pending`} />
         <Metric icon="◆" value={String(highTierCount)} label="Tier 1-2" delta="Highest MG bands" />
       </div>
@@ -2212,7 +2212,7 @@ function TierMappingPage({
               <tr>
                 <FilterHeader label="Title" filterKey="title" books={books} filters={filters} onFilter={setFilter} />
                 <FilterHeader label="Author" filterKey="author" books={books} filters={filters} onFilter={setFilter} />
-                <FilterHeader label="GR Ratings" filterKey="reviews" books={books} filters={filters} onFilter={setFilter} tierRules={tierRules} usePersistedTier={false} />
+                <FilterHeader label="GR rating count" filterKey="reviews" books={books} filters={filters} onFilter={setFilter} tierRules={tierRules} usePersistedTier={false} />
                 <FilterHeader label="Length" filterKey="length" books={books} filters={filters} onFilter={setFilter} tierRules={tierRules} usePersistedTier={false} />
                 <FilterHeader label="Tier" filterKey="tier" books={books} filters={filters} onFilter={setFilter} tierRules={tierRules} usePersistedTier={false} />
                 <FilterHeader label="MG Min" filterKey="mgMin" books={books} filters={filters} onFilter={setFilter} tierRules={tierRules} usePersistedTier={false} />
