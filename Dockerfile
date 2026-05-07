@@ -26,4 +26,7 @@ COPY backend/ ./backend/
 COPY --from=frontend-build /app/frontend/dist ./backend/static
 
 WORKDIR /app/backend
+EXPOSE 8080
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://localhost:8080/', timeout=4).status<500 else 1)" || exit 1
 CMD ["sh", "-c", "uvicorn app:app --host 0.0.0.0 --port ${PORT:-8080}"]
