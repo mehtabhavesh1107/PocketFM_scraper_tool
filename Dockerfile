@@ -1,7 +1,10 @@
 FROM node:22-bookworm-slim AS frontend-build
 WORKDIR /app/frontend
+# Force dev install so vite (a devDependency) is available even when the build
+# is invoked with NODE_ENV=production from upstream env (e.g. Coolify).
+ENV NODE_ENV=development
 COPY frontend/package*.json ./
-RUN npm ci
+RUN npm ci --include=dev
 COPY frontend/ ./
 ENV VITE_API_BASE_URL=/api
 RUN npm run build
