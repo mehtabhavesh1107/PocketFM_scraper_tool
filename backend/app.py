@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from datetime import datetime
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -14,6 +14,7 @@ from commissioning.db import SessionLocal, init_db
 from commissioning.jobs.manager import job_manager
 from commissioning.models import Job, JobEvent
 from commissioning.settings import ALLOWED_ORIGINS, ensure_directories
+from google_auth import attach_oauth, require_auth
 
 
 def _recover_interrupted_jobs() -> None:
@@ -73,39 +74,30 @@ app.add_middleware(
 )
 
 
-# ── Auth: trust oauth2-proxy / forward-auth header, enforce @pocketfm.com ────
-import re as _re
-from starlette.requests import Request as _Request
-from starlette.responses import PlainTextResponse as _PlainTextResponse
+# Mount Google OAuth (SessionMiddleware + /auth/google + /auth/google/callback + /auth/me + /auth/logout)
+attach_oauth(app)
 
-_ALLOWED_EMAIL = _re.compile(r"^[^@]+@pocketfm\.com$")
-_AUTH_BYPASS_PREFIXES = ("/healthz", "/health")
-
-
-@app.middleware("http")
-async def _enforce_pocketfm_email(request: _Request, call_next):
-    if any(request.url.path.startswith(p) for p in _AUTH_BYPASS_PREFIXES):
-        return await call_next(request)
-    email = request.headers.get("x-auth-request-email", "")
-    if not email or not _ALLOWED_EMAIL.match(email):
-        return _PlainTextResponse(
-            "Unauthorized: @pocketfm.com Google sign-in required",
-            status_code=401,
-        )
-    request.scope["authenticated_email"] = email
-    return await call_next(request)
-
-
-app.include_router(router)
+# All API routes are gated behind @pocketfm.com Google sign-in
+app.include_router(router, dependencies=[Depends(require_auth)])
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 if STATIC_DIR.exists():
     assets_dir = STATIC_DIR / "assets"
     if assets_dir.exists():
+        # Vite hashed bundles are public so the SPA shell can hydrate post-login.
         app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
 
-    @app.get("/{full_path:path}", include_in_schema=False)
+    @app.get("/login", include_in_schema=False)
+    async def serve_login():
+        # Public login page (Google sign-in button). Falls back to index if absent
+        # (the SPA can render its own login screen).
+        login_file = STATIC_DIR / "login.html"
+        if login_file.is_file():
+            return FileResponse(login_file)
+        return FileResponse(STATIC_DIR / "index.html")
+
+    @app.get("/{full_path:path}", include_in_schema=False, dependencies=[Depends(require_auth)])
     async def serve_frontend(full_path: str):
         if full_path.startswith("api/"):
             raise HTTPException(status_code=404, detail="API route not found")
