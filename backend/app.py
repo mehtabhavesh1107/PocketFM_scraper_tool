@@ -72,6 +72,30 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+# ── Auth: trust oauth2-proxy / forward-auth header, enforce @pocketfm.com ────
+import re as _re
+from starlette.requests import Request as _Request
+from starlette.responses import PlainTextResponse as _PlainTextResponse
+
+_ALLOWED_EMAIL = _re.compile(r"^[^@]+@pocketfm\.com$")
+_AUTH_BYPASS_PREFIXES = ("/healthz", "/health")
+
+
+@app.middleware("http")
+async def _enforce_pocketfm_email(request: _Request, call_next):
+    if any(request.url.path.startswith(p) for p in _AUTH_BYPASS_PREFIXES):
+        return await call_next(request)
+    email = request.headers.get("x-auth-request-email", "")
+    if not email or not _ALLOWED_EMAIL.match(email):
+        return _PlainTextResponse(
+            "Unauthorized: @pocketfm.com Google sign-in required",
+            status_code=401,
+        )
+    request.scope["authenticated_email"] = email
+    return await call_next(request)
+
+
 app.include_router(router)
 
 
