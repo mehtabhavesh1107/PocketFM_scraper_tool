@@ -32,18 +32,40 @@ ALLOWED_EMAIL = re.compile(r"^[^@]+@pocketfm\.com$")
 _oauth = OAuth()
 
 
+def _safe_relative(path: str | None) -> str:
+    """Return path iff it is a same-origin relative URL; otherwise '/'.
+    Blocks open-redirect via // (protocol-relative), absolute URLs, and CRLF injection.
+    """
+    if not path or not isinstance(path, str):
+        return "/"
+    if not path.startswith("/"):
+        return "/"
+    if path.startswith("//") or path.startswith("/\\"):
+        return "/"
+    if "\r" in path or "\n" in path:
+        return "/"
+    return path
+
+
 def attach_oauth(app: FastAPI) -> None:
     """Add SessionMiddleware + /auth/google, /auth/google/callback, /auth/logout, /auth/me."""
     base_url = (os.environ.get("APP_BASE_URL", "") or "").rstrip("/")
     if not base_url:
         raise RuntimeError("APP_BASE_URL env is required for google-auth")
 
+    session_secret = os.environ.get("SESSION_SECRET", "")
+    if len(session_secret) < 32:
+        raise RuntimeError(
+            "SESSION_SECRET env is required and must be ≥32 random chars "
+            "(generate with `openssl rand -hex 32`)"
+        )
+
     app.add_middleware(
         SessionMiddleware,
-        secret_key=os.environ.get("SESSION_SECRET", "dev-secret-change-me"),
+        secret_key=session_secret,
         session_cookie="scraper_sid",
         same_site="lax",
-        https_only=os.environ.get("NODE_ENV") == "production",
+        https_only=True,
         max_age=12 * 60 * 60,
     )
 
@@ -57,8 +79,7 @@ def attach_oauth(app: FastAPI) -> None:
 
     @app.get("/auth/google", include_in_schema=False)
     async def google_login(request: Request, next: str | None = None):
-        if next:
-            request.session["return_to"] = next
+        request.session["return_to"] = _safe_relative(next)
         redirect_uri = base_url + "/auth/google/callback"
         return await _oauth.google.authorize_redirect(
             request,
@@ -85,7 +106,7 @@ def attach_oauth(app: FastAPI) -> None:
             "name":  userinfo.get("name") or email,
             "sub":   userinfo.get("sub"),
         }
-        dest = request.session.pop("return_to", "/")
+        dest = _safe_relative(request.session.pop("return_to", "/"))
         return RedirectResponse(dest)
 
     @app.get("/auth/logout", include_in_schema=False)
@@ -109,24 +130,24 @@ def _is_browser_navigation(request: Request) -> bool:
 
 
 def require_auth(request: Request) -> dict[str, Any]:
-    """FastAPI dependency. Use as `Depends(require_auth)`."""
-    # Trust upstream forward-auth header (defense in depth)
-    proxy_email = request.headers.get("x-auth-request-email", "")
-    if proxy_email and ALLOWED_EMAIL.match(proxy_email):
-        return {"email": proxy_email, "via": "forward-auth"}
-
+    """FastAPI dependency. Use as `Depends(require_auth)`.
+    Auth source: signed session cookie only. The X-Auth-Request-Email header is
+    NOT trusted — there is no longer a forward-auth gateway in front of this app,
+    so any internet client could otherwise spoof it and bypass OAuth.
+    """
     user = request.session.get("user") if hasattr(request, "session") else None
     if user and ALLOWED_EMAIL.match(user.get("email", "")):
         return user
 
     if _is_browser_navigation(request):
         # 302 to /auth/google with ?next=
-        next_ = str(request.url.path)
-        if request.url.query:
+        next_ = _safe_relative(str(request.url.path))
+        if request.url.query and next_ != "/":
             next_ += "?" + request.url.query
+        from urllib.parse import quote
         raise HTTPException(
             status_code=status.HTTP_307_TEMPORARY_REDIRECT,
-            headers={"Location": f"/auth/google?next={next_}"},
+            headers={"Location": f"/auth/google?next={quote(next_, safe='/')}"},
         )
 
     raise HTTPException(

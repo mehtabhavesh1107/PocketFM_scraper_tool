@@ -65,10 +65,13 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# Refuse the credentials+wildcard combination — it lets any origin make
+# authenticated requests against the user's session cookie.
+_cors_wildcard = ALLOWED_ORIGINS == ["*"] or "*" in ALLOWED_ORIGINS
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS if ALLOWED_ORIGINS != ["*"] else ["*"],
-    allow_credentials=True,
+    allow_origins=ALLOWED_ORIGINS if not _cors_wildcard else [],
+    allow_credentials=not _cors_wildcard,
     allow_methods=["*"],
     allow_headers=["*"],
 )
